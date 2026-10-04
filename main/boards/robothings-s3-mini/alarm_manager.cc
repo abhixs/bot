@@ -401,9 +401,19 @@ void AlarmManager::RingTick() {
     ring_elapsed_ms_ += kRingIntervalMs;
     auto& app = Application::GetInstance();
     app.Schedule([&app]() {
-        // Do not talk over an active conversation; the eyes still show the alarm.
-        if (app.GetDeviceState() == kDeviceStateIdle) {
-            app.PlaySound(AlarmToneOgg());
+        // The alarm wins over a conversation: setting an alarm by voice usually
+        // leaves the device listening for a while, so end the chat first and
+        // beep once the device is idle (the next tick, 1.5 s later).
+        switch (app.GetDeviceState()) {
+            case kDeviceStateIdle:
+                app.PlaySound(AlarmToneOgg());
+                break;
+            case kDeviceStateListening:
+            case kDeviceStateSpeaking:
+                app.ToggleChatState();  // listening: close channel, speaking: abort
+                break;
+            default:
+                break;
         }
     });
 }
