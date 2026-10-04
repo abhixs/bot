@@ -1,0 +1,70 @@
+name: Build RoboThings firmware
+
+on:
+  workflow_dispatch:
+    inputs:
+      language:
+        description: "Device prompt language (en-US, zh-CN, hi-IN, ...)"
+        default: "en-US"
+      wake_word:
+        description: "Wake word: nihaoxiaozhi, wn9_hiesp, wn9_jarvis_tts, wn9_alexa, disabled ..."
+        default: "nihaoxiaozhi"
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build robothings-s3-mini
+    runs-on: ubuntu-latest
+    container:
+      image: espressif/idf:v6.1
+    env:
+      LANGUAGE: ${{ inputs.language || 'en-US' }}
+      WAKE_WORD: ${{ inputs.wake_word || 'nihaoxiaozhi' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build
+        shell: bash
+        run: |
+          source "$IDF_PATH/export.sh"
+          python scripts/build.py robothings-s3-mini --name robothings-s3-mini \
+            --language "$LANGUAGE" --wake-word "$WAKE_WORD"
+
+      - name: Package firmware and flasher
+        shell: bash
+        run: |
+          set -e
+          OUT=robothings-firmware
+          mkdir -p "$OUT/firmware"
+          cp build/bootloader/bootloader.bin            "$OUT/firmware/"
+          cp build/partition_table/partition-table.bin  "$OUT/firmware/"
+          cp build/ota_data_initial.bin                 "$OUT/firmware/"
+          cp build/xiaozhi.bin                          "$OUT/firmware/"
+          cp build/generated_assets.bin                 "$OUT/firmware/"
+          cp build/merged-binary.bin                    "$OUT/firmware/"
+          cp flasher/index.html flasher/manifest.json flasher/README.md "$OUT/"
+          APP=$(stat -c %s build/xiaozhi.bin)
+          ASSETS=$(stat -c %s build/generated_assets.bin)
+          echo "xiaozhi.bin: $APP bytes (limit $((0x2F0000)))"
+          echo "generated_assets.bin: $ASSETS bytes (limit $((0x100000)))"
+          test "$APP" -le $((0x2F0000))
+          test "$ASSETS" -le $((0x100000))
+          {
+            echo "### RoboThings firmware"
+            echo "- app: $APP / $((0x2F0000)) bytes"
+            echo "- assets: $ASSETS / $((0x100000)) bytes"
+            echo "- language: $LANGUAGE, wake word: $WAKE_WORD"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: robothings-firmware
+          path: robothings-firmware
+          if-no-files-found: error

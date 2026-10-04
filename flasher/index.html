@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>RoboThings S3 Mini Flasher</title>
+  <script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module"></script>
+  <style>
+    :root { --bg:#0e1116; --card:#171b22; --line:#262c36; --text:#e8edf3; --muted:#9aa4b2; --accent:#4cc3ff; }
+    * { box-sizing: border-box; }
+    body { margin:0; background:var(--bg); color:var(--text); font:15px/1.6 system-ui,-apple-system,"Segoe UI",sans-serif; }
+    main { max-width:680px; margin:0 auto; padding:40px 16px 64px; }
+    h1 { font-size:26px; margin:0 0 6px; }
+    p.sub { color:var(--muted); margin:0 0 28px; }
+    .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:20px; margin-bottom:16px; }
+    .card h2 { font-size:16px; margin:0 0 10px; }
+    ol, ul { margin:0; padding-left:20px; }
+    li { margin:4px 0; }
+    code { background:#0b0e12; border:1px solid var(--line); border-radius:6px; padding:1px 6px; }
+    esp-web-install-button button { background:var(--accent); color:#04121b; border:0; border-radius:10px; padding:12px 22px; font-weight:600; font-size:15px; cursor:pointer; }
+    .muted { color:var(--muted); font-size:13px; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>RoboThings S3 Mini</h1>
+  <p class="sub">Xiaozhi AI voice assistant for ESP32-S3 Super Mini Zero, with animated robot eyes and voice alarms.</p>
+
+  <div class="card">
+    <h2>Flash from the browser</h2>
+    <ol>
+      <li>Use Chrome or Edge on a computer and a USB <b>data</b> cable.</li>
+      <li>If the port does not show up: hold BOOT, tap RESET, release BOOT.</li>
+      <li>Click the button and pick the serial port.</li>
+    </ol>
+    <p style="margin-top:16px">
+      <esp-web-install-button manifest="manifest.json">
+        <button slot="activate">Flash firmware</button>
+        <span slot="unsupported">This browser cannot flash. Use Chrome or Edge on a computer.</span>
+        <span slot="not-allowed">Open this page over https or localhost.</span>
+      </esp-web-install-button>
+    </p>
+    <p class="muted">Manual flashing (ESP32-S3, 4MB, DIO, 80MHz): bootloader.bin @ 0x0, partition-table.bin @ 0x8000, ota_data_initial.bin @ 0xd000, xiaozhi.bin @ 0x10000, generated_assets.bin @ 0x300000. Or merged-binary.bin @ 0x0.</p>
+  </div>
+
+  <div class="card">
+    <h2>Try saying</h2>
+    <ul>
+      <li>"Wake me up at 7 am" / "Kal subah 7 baje alarm laga do"</li>
+      <li>"Set an alarm for 6:30 every weekday and turn on the lamp"</li>
+      <li>"10 minute ka timer lagao"</li>
+      <li>"Which alarms are set?" / "Cancel the 7 o'clock alarm"</li>
+      <li>"Turn on the lamp"</li>
+    </ul>
+    <p class="muted">Any button stops a ringing alarm. You can also say "snooze for 5 minutes".</p>
+  </div>
+</main>
+</body>
+</html>
