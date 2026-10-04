@@ -12,11 +12,16 @@ with a new board `robothings-s3-mini`.
   crying, angry, surprised, love (heart eyes), thinking, confused, wink, cool.
 - **Voice alarms and timers** (device-side MCP tools `self.alarm.*`):
   set once / daily / weekdays / weekends / chosen days, list, cancel, snooze, optional
-  lamp-on with the alarm. Saved in flash, ring without internet, stop with any button,
-  auto-stop after 60 s.
+  lamp-on with the alarm. Saved in flash, ring without internet. Stop it by saying the
+  wake word ("Alexa") or pressing any button; it auto-stops after 60 s.
 - **Lamp relay** voice control (GPIO 12), as before.
 - **India time (IST)** by default: the clock is synced from internet time (SNTP) and
   kept at UTC+05:30. Another zone can be set by voice (tool `self.clock.set_timezone`).
+
+## Wake word
+
+"Alexa" (ESP-SR model `wn9_alexa`). Another one can be chosen when running the
+workflow manually (Actions -> Build RoboThings firmware -> Run workflow).
 
 ## Wiring (unchanged from the original firmware)
 

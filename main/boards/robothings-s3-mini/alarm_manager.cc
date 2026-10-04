@@ -385,6 +385,7 @@ void AlarmManager::StartRinging(const RingInfo& info) {
         }
     }
     ring_elapsed_ms_ = 0;
+    idle_seen_while_ringing_ = false;
     esp_timer_stop(ring_timer_);
     esp_timer_start_periodic(ring_timer_, kRingIntervalMs * 1000);
     RingTick();
@@ -400,17 +401,26 @@ void AlarmManager::RingTick() {
     }
     ring_elapsed_ms_ += kRingIntervalMs;
     auto& app = Application::GetInstance();
-    app.Schedule([&app]() {
-        // The alarm wins over a conversation: setting an alarm by voice usually
-        // leaves the device listening for a while, so end the chat first and
-        // beep once the device is idle (the next tick, 1.5 s later).
+    app.Schedule([this, &app]() {
+        if (!ringing_) return;
         switch (app.GetDeviceState()) {
             case kDeviceStateIdle:
+                idle_seen_while_ringing_ = true;
                 app.PlaySound(AlarmToneOgg());
                 break;
             case kDeviceStateListening:
             case kDeviceStateSpeaking:
-                app.ToggleChatState();  // listening: close channel, speaking: abort
+            case kDeviceStateConnecting:
+                if (idle_seen_while_ringing_) {
+                    // The device was idle and ringing, then someone said the wake word
+                    // (or pressed talk): that means "I'm awake", so stop the alarm and
+                    // let the conversation go on.
+                    StopRinging(0);
+                } else if (app.GetDeviceState() != kDeviceStateConnecting) {
+                    // A conversation left over from setting the alarm: end it so the
+                    // alarm can be heard.
+                    app.ToggleChatState();
+                }
                 break;
             default:
                 break;

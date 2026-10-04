@@ -8,7 +8,7 @@ on:
         default: "en-US"
       wake_word:
         description: "Wake word: nihaoxiaozhi, wn9_hiesp, wn9_jarvis_tts, wn9_alexa, disabled ..."
-        default: "nihaoxiaozhi"
+        default: "wn9_alexa"
   push:
     branches:
       - main
@@ -24,7 +24,7 @@ jobs:
       image: espressif/idf:v6.1
     env:
       LANGUAGE: ${{ inputs.language || 'en-US' }}
-      WAKE_WORD: ${{ inputs.wake_word || 'nihaoxiaozhi' }}
+      WAKE_WORD: ${{ inputs.wake_word || 'wn9_alexa' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
