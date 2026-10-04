@@ -18,3 +18,6 @@ main/mmap_generate_emoji.h
 *.bin
 mmap_generate_*.h
 .clangd
+
+# Generated in CI from the JAMENDO_CLIENT_ID secret
+main/boards/robothings-s3-mini/jamendo_config.h

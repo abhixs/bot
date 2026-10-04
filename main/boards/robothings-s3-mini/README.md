@@ -18,6 +18,11 @@ with a new board `robothings-s3-mini`.
 - **Music from your own library**: run `tools/music-server/robothings_music_server.py`
   on a PC with your songs, then say "Alexa, Tum Hi Ho chalao". Saying "Alexa" pauses,
   the song resumes after the chat. Tools `self.music.*`.
+- **Free online music (Jamendo)**: legal music by independent artists in every genre,
+  streamed and decoded (MP3) on the device, no PC needed. Say "Alexa, lofi music chalao"
+  or "Alexa, play some relaxing piano". Jamendo has no Bollywood songs; those come from
+  your own library. Needs a free Jamendo client ID as the `JAMENDO_CLIENT_ID` repository
+  secret (see below).
 - **India time (IST)** by default: the clock is synced from internet time (SNTP) and
   kept at UTC+05:30. Another zone can be set by voice (tool `self.clock.set_timezone`).
 
@@ -67,3 +72,14 @@ GitHub Pages flasher works by replacing the five `.bin` files.
 2. Join it, open `http://192.168.4.1`, choose your Wi-Fi.
 3. The OLED status line shows an activation code. Add the device on
    https://xiaozhi.me with that code. Set language, voice and personality there.
+
+## Online music setup (Jamendo, one time)
+
+1. Create a free account at https://devportal.jamendo.com and add an application
+   (non-commercial use). Copy its **Client ID**.
+2. In GitHub: repository **Settings -> Secrets and variables -> Actions -> New repository
+   secret**. Name `JAMENDO_CLIENT_ID`, value = the Client ID.
+3. **Actions -> Build RoboThings firmware -> Run workflow**, then flash the new firmware.
+
+Jamendo's API is free for non-commercial use; selling devices with it needs a
+commercial licence from Jamendo.

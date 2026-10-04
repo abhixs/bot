@@ -29,6 +29,19 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Jamendo client ID (from repository secret)
+        shell: bash
+        env:
+          JAMENDO_CLIENT_ID: ${{ secrets.JAMENDO_CLIENT_ID }}
+        run: |
+          ID=$(printf '%s' "$JAMENDO_CLIENT_ID" | tr -cd 'A-Za-z0-9')
+          if [ -n "$ID" ]; then
+            printf '#pragma once\n#define JAMENDO_CLIENT_ID "%s"\n' "$ID" > main/boards/robothings-s3-mini/jamendo_config.h
+            echo "- online music (Jamendo): enabled" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "- online music (Jamendo): disabled, add the JAMENDO_CLIENT_ID secret" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
       - name: Build both display variants
         shell: bash
         run: |
