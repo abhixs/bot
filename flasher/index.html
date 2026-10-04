@@ -33,13 +33,19 @@
       <li>If the port does not show up: hold BOOT, tap RESET, release BOOT.</li>
       <li>Click the button and pick the serial port.</li>
     </ol>
-    <p style="margin-top:16px">
-      <esp-web-install-button manifest="manifest.json">
-        <button slot="activate">Flash firmware</button>
-        <span slot="unsupported">This browser cannot flash. Use Chrome or Edge on a computer.</span>
-        <span slot="not-allowed">Open this page over https or localhost.</span>
-      </esp-web-install-button>
-    </p>
+    <p style="margin:16px 0 6px"><b>1.3 inch OLED (SH1106)</b> &mdash; most 1.3" I2C modules</p>
+    <esp-web-install-button manifest="manifest-sh1106.json">
+      <button slot="activate">Flash for 1.3" OLED</button>
+      <span slot="unsupported">This browser cannot flash. Use Chrome or Edge on a computer.</span>
+      <span slot="not-allowed">Open this page over https or localhost.</span>
+    </esp-web-install-button>
+    <p style="margin:18px 0 6px"><b>0.96 inch OLED (SSD1306)</b></p>
+    <esp-web-install-button manifest="manifest.json">
+      <button slot="activate">Flash for 0.96" OLED</button>
+      <span slot="unsupported">This browser cannot flash. Use Chrome or Edge on a computer.</span>
+      <span slot="not-allowed">Open this page over https or localhost.</span>
+    </esp-web-install-button>
+    <p class="muted" style="margin-top:14px">Screen full of random dots? You flashed the other display type; flash the other button.</p>
     <p class="muted">Manual flashing (ESP32-S3, 4MB, DIO, 80MHz): bootloader.bin @ 0x0, partition-table.bin @ 0x8000, ota_data_initial.bin @ 0xd000, xiaozhi.bin @ 0x10000, generated_assets.bin @ 0x300000. Or merged-binary.bin @ 0x0.</p>
   </div>
 

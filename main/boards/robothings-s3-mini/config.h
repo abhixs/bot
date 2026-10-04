@@ -53,8 +53,16 @@
 #error "OLED display type is not selected"
 #endif
 
+#ifdef SH1106
+// 1.3" modules: the SH1106 driver maps mirror=false to the usual upright
+// orientation (segment remap 0xA1, COM scan 0xC8).
+#define DISPLAY_MIRROR_X false
+#define DISPLAY_MIRROR_Y false
+#else
+// 0.96" SSD1306 modules.
 #define DISPLAY_MIRROR_X true
 #define DISPLAY_MIRROR_Y true
+#endif
 
 
 // Lamp relay (voice controlled, can also switch on with an alarm)

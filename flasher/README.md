@@ -44,6 +44,10 @@ manually with ESP Flash Download Tool (ESP32-S3, 4MB, DIO, 80MHz):
 
 `merged-binary.bin` contains all of them at 0x0.
 
+Two builds are published: `firmware/` for 0.96" SSD1306 OLEDs and
+`firmware-sh1106/` for 1.3" SH1106 OLEDs (most 1.3" I2C modules). The wrong one
+shows a screen full of random dots.
+
 The partition layout is the same as the original firmware, so the existing
 GitHub Pages flasher works by replacing the five `.bin` files.
 

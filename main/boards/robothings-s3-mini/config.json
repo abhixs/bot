@@ -12,6 +12,17 @@
                 "CONFIG_SPIRAM_MODE_QUAD=y",
                 "CONFIG_LV_MEM_SIZE_KILOBYTES=256"
             ]
+        },
+        {
+            "name": "robothings-s3-mini-sh1106",
+            "sdkconfig_append": [
+                "CONFIG_OLED_SH1106_128X64=y",
+                "CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y",
+                "CONFIG_ESPTOOLPY_FLASHMODE_DIO=y",
+                "CONFIG_PARTITION_TABLE_CUSTOM_FILENAME=\"partitions/v2/4m.csv\"",
+                "CONFIG_SPIRAM_MODE_QUAD=y",
+                "CONFIG_LV_MEM_SIZE_KILOBYTES=256"
+            ]
         }
     ]
 }

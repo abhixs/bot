@@ -29,38 +29,33 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Build
-        shell: bash
-        run: |
-          source "$IDF_PATH/export.sh"
-          python scripts/build.py robothings-s3-mini --name robothings-s3-mini \
-            --language "$LANGUAGE" --wake-word "$WAKE_WORD"
-
-      - name: Package firmware and flasher
+      - name: Build both display variants
         shell: bash
         run: |
           set -e
+          source "$IDF_PATH/export.sh"
           OUT=robothings-firmware
-          mkdir -p "$OUT/firmware"
-          cp build/bootloader/bootloader.bin            "$OUT/firmware/"
-          cp build/partition_table/partition-table.bin  "$OUT/firmware/"
-          cp build/ota_data_initial.bin                 "$OUT/firmware/"
-          cp build/xiaozhi.bin                          "$OUT/firmware/"
-          cp build/generated_assets.bin                 "$OUT/firmware/"
-          cp build/merged-binary.bin                    "$OUT/firmware/"
-          cp flasher/index.html flasher/manifest.json flasher/README.md "$OUT/"
-          APP=$(stat -c %s build/xiaozhi.bin)
-          ASSETS=$(stat -c %s build/generated_assets.bin)
-          echo "xiaozhi.bin: $APP bytes (limit $((0x2F0000)))"
-          echo "generated_assets.bin: $ASSETS bytes (limit $((0x100000)))"
-          test "$APP" -le $((0x2F0000))
-          test "$ASSETS" -le $((0x100000))
-          {
-            echo "### RoboThings firmware"
-            echo "- app: $APP / $((0x2F0000)) bytes"
-            echo "- assets: $ASSETS / $((0x100000)) bytes"
-            echo "- language: $LANGUAGE, wake word: $WAKE_WORD"
-          } >> "$GITHUB_STEP_SUMMARY"
+          mkdir -p "$OUT"
+          for VARIANT in robothings-s3-mini robothings-s3-mini-sh1106; do
+            rm -rf build sdkconfig
+            python scripts/build.py robothings-s3-mini --name "$VARIANT" \
+              --language "$LANGUAGE" --wake-word "$WAKE_WORD"
+            if [ "$VARIANT" = robothings-s3-mini ]; then DIR=firmware; else DIR=firmware-sh1106; fi
+            mkdir -p "$OUT/$DIR"
+            cp build/bootloader/bootloader.bin            "$OUT/$DIR/"
+            cp build/partition_table/partition-table.bin  "$OUT/$DIR/"
+            cp build/ota_data_initial.bin                 "$OUT/$DIR/"
+            cp build/xiaozhi.bin                          "$OUT/$DIR/"
+            cp build/generated_assets.bin                 "$OUT/$DIR/"
+            cp build/merged-binary.bin                    "$OUT/$DIR/"
+            APP=$(stat -c %s build/xiaozhi.bin)
+            ASSETS=$(stat -c %s build/generated_assets.bin)
+            test "$APP" -le $((0x2F0000))
+            test "$ASSETS" -le $((0x100000))
+            echo "- $VARIANT: app $APP / $((0x2F0000)) bytes, assets $ASSETS / $((0x100000)) bytes" >> "$GITHUB_STEP_SUMMARY"
+          done
+          cp flasher/index.html flasher/manifest.json flasher/manifest-sh1106.json flasher/README.md "$OUT/"
+          echo "- language: $LANGUAGE, wake word: $WAKE_WORD" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload
         uses: actions/upload-artifact@v4
