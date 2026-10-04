@@ -28,13 +28,13 @@
 
 #define TAG "MusicPlayer"
 
-// The Jamendo client ID is injected at build time from the JAMENDO_CLIENT_ID
-// GitHub secret (see .github/workflows/robothings.yml); it is not stored in git.
+// Jamendo client ID. A JAMENDO_CLIENT_ID repository secret, if set, overrides this
+// default at build time (see .github/workflows/robothings.yml).
 #if __has_include("jamendo_config.h")
 #include "jamendo_config.h"
 #endif
 #ifndef JAMENDO_CLIENT_ID
-#define JAMENDO_CLIENT_ID ""
+#define JAMENDO_CLIENT_ID "daf06771"
 #endif
 
 namespace {

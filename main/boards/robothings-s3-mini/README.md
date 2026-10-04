@@ -78,7 +78,8 @@ GitHub Pages flasher works by replacing the five `.bin` files.
 1. Create a free account at https://devportal.jamendo.com and add an application
    (non-commercial use). Copy its **Client ID**.
 2. In GitHub: repository **Settings -> Secrets and variables -> Actions -> New repository
-   secret**. Name `JAMENDO_CLIENT_ID`, value = the Client ID.
+   secret**. Name `JAMENDO_CLIENT_ID`, value = the Client ID. (Optional: the firmware
+   has a default client ID in `music_player.cc`; the secret overrides it.)
 3. **Actions -> Build RoboThings firmware -> Run workflow**, then flash the new firmware.
 
 Jamendo's API is free for non-commercial use; selling devices with it needs a
