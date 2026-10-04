@@ -15,6 +15,8 @@ with a new board `robothings-s3-mini`.
   lamp-on with the alarm. Saved in flash, ring without internet, stop with any button,
   auto-stop after 60 s.
 - **Lamp relay** voice control (GPIO 12), as before.
+- **India time (IST)** by default: the clock is synced from internet time (SNTP) and
+  kept at UTC+05:30. Another zone can be set by voice (tool `self.clock.set_timezone`).
 
 ## Wiring (unchanged from the original firmware)
 

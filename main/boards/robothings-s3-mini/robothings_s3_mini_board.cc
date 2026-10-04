@@ -4,6 +4,7 @@
 #include "application.h"
 #include "assets/lang_config.h"
 #include "button.h"
+#include "clock_sync.h"
 #include "codecs/no_audio_codec.h"
 #include "config.h"
 #include "led/single_led.h"
@@ -195,6 +196,7 @@ private:
 
     void InitializeTools() {
         lamp_ = new RelayLamp(LAMP_GPIO);
+        ClockSync::GetInstance().Initialize();  // keep the clock on IST
 
         auto& alarms = AlarmManager::GetInstance();
         alarms.OnRingStart([this](const AlarmManager::RingInfo& info) {
