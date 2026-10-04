@@ -201,15 +201,24 @@ void RoboEyesDisplay::Animate(uint32_t elapsed_ms) {
         last_state_ = static_cast<int>(state);
         idle_ms_ = 0;
     }
-    if (state == kDeviceStateIdle && !alarm_active_) {
+    if (state == kDeviceStateIdle && !alarm_active_ && !music_active_) {
         idle_ms_ = std::min<uint32_t>(idle_ms_ + elapsed_ms, kSleepAfterMs);
     } else {
         idle_ms_ = 0;
     }
 
     RoboEyes::Activity activity = RoboEyes::Activity::Idle;
+    const bool music_showing = music_active_ && state == kDeviceStateIdle && !alarm_active_;
+    if (music_showing && !showing_music_text_ && status_label_ != nullptr) {
+        lv_label_set_text(status_label_, music_text_.c_str());
+        lv_obj_remove_flag(status_label_, LV_OBJ_FLAG_HIDDEN);
+    }
+    showing_music_text_ = music_showing;
+
     if (alarm_active_) {
         activity = RoboEyes::Activity::Alarm;
+    } else if (music_showing) {
+        activity = RoboEyes::Activity::Music;
     } else if (power_save_ || idle_ms_ >= kSleepAfterMs) {
         activity = RoboEyes::Activity::Sleeping;
     } else {
@@ -243,6 +252,10 @@ void RoboEyesDisplay::SetStatus(const char* status) {
     if (alarm_active_) {
         return;  // the alarm banner stays pinned until it is cleared
     }
+    if (music_active_ && Application::GetInstance().GetDeviceState() == kDeviceStateIdle) {
+        return;  // keep the song title instead of the idle clock
+    }
+    showing_music_text_ = false;
     LvglDisplay::SetStatus(status);
 }
 
@@ -312,4 +325,26 @@ void RoboEyesDisplay::ClearAlarmBanner() {
     }
     SetStatus(Lang::Strings::STANDBY);
     UpdateStatusBar(true);
+}
+
+void RoboEyesDisplay::SetNowPlaying(const std::string& title) {
+    DisplayLockGuard lock(this);
+    music_active_ = true;
+    music_text_ = "Playing: " + title;
+    showing_music_text_ = false;  // the next frame puts the title in the status line
+    idle_ms_ = 0;
+}
+
+void RoboEyesDisplay::ClearNowPlaying() {
+    {
+        DisplayLockGuard lock(this);
+        if (!music_active_) return;
+        music_active_ = false;
+        showing_music_text_ = false;
+        last_displayed_clock_min_ = -1;
+    }
+    if (Application::GetInstance().GetDeviceState() == kDeviceStateIdle) {
+        SetStatus(Lang::Strings::STANDBY);
+        UpdateStatusBar(true);
+    }
 }

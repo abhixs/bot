@@ -9,6 +9,7 @@
 #include "config.h"
 #include "led/single_led.h"
 #include "mcp_server.h"
+#include "music_player.h"
 #include "robo_eyes_display.h"
 #include "wifi_board.h"
 
@@ -198,8 +199,22 @@ private:
         lamp_ = new RelayLamp(LAMP_GPIO);
         ClockSync::GetInstance().Initialize();  // keep the clock on IST
 
+        auto& music = MusicPlayer::GetInstance();
+        music.OnNowPlaying([this](const std::string& title) {
+            Application::GetInstance().Schedule([this, title]() {
+                if (eyes_display_ != nullptr) eyes_display_->SetNowPlaying(title);
+            });
+        });
+        music.OnStopped([this]() {
+            Application::GetInstance().Schedule([this]() {
+                if (eyes_display_ != nullptr) eyes_display_->ClearNowPlaying();
+            });
+        });
+        music.Initialize();
+
         auto& alarms = AlarmManager::GetInstance();
         alarms.OnRingStart([this](const AlarmManager::RingInfo& info) {
+            MusicPlayer::GetInstance().Stop();  // the alarm takes over the speaker
             if (info.lamp && lamp_ != nullptr) {
                 lamp_->Set(true);
             }

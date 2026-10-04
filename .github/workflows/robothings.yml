@@ -55,6 +55,7 @@ jobs:
             echo "- $VARIANT: app $APP / $((0x2F0000)) bytes, assets $ASSETS / $((0x100000)) bytes" >> "$GITHUB_STEP_SUMMARY"
           done
           cp flasher/index.html flasher/manifest.json flasher/manifest-sh1106.json flasher/README.md "$OUT/"
+          cp -r tools/music-server "$OUT/music-server"
           echo "- language: $LANGUAGE, wake word: $WAKE_WORD" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload

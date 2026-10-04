@@ -247,6 +247,15 @@ void RoboEyes::BuildTarget(Pose& t) {
     }
 
     // Activity overlays.
+    if (activity_ == Activity::Music && mood != Mood::Alarm) {
+        // Bob on a ~110 BPM beat and sway gently side to side.
+        float beat = std::fabs(std::sin(time_ms_ * kPi / 545.0f));
+        t.gaze_y += 1.0f - beat * 3.0f;
+        t.gaze_x = std::sin(time_ms_ * kPi / 1090.0f) * 5.0f;
+        if (mood == Mood::Neutral) {
+            t.left.lid_bottom = t.right.lid_bottom = 0.45f;
+        }
+    }
     if (activity_ == Activity::Listening && mood != Mood::Sleepy) {
         float pulse = std::sin(time_ms_ / 330.0f) * 1.5f;
         t.left.h += 3 + pulse;

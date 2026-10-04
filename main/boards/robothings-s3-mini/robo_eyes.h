@@ -39,6 +39,7 @@ public:
         Setup,     // Wi-Fi setup, activation, upgrade
         Sleeping,  // power-save
         Alarm,     // an alarm or timer is ringing
+        Music,     // a song is playing: happy eyes bobbing to the beat
     };
 
     // `on` is the color that lights an OLED pixel, `off` the background color.

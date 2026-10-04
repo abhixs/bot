@@ -32,6 +32,11 @@ public:
     void SetAlarmBanner(const std::string& text);
     void ClearAlarmBanner();
 
+    // While music plays and the device is idle the status line shows the song and
+    // the eyes dance; a conversation still shows its normal status.
+    void SetNowPlaying(const std::string& title);
+    void ClearNowPlaying();
+
 private:
     bool Lock(int timeout_ms = 0) override;
     void Unlock() override;
@@ -48,6 +53,9 @@ private:
     lv_timer_t* animation_timer_ = nullptr;
 
     bool alarm_active_ = false;
+    bool music_active_ = false;
+    bool showing_music_text_ = false;
+    std::string music_text_;
     bool power_save_ = false;
     uint32_t idle_ms_ = 0;
     int last_state_ = -1;

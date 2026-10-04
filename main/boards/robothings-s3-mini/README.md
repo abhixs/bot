@@ -15,6 +15,9 @@ with a new board `robothings-s3-mini`.
   lamp-on with the alarm. Saved in flash, ring without internet. Stop it by saying the
   wake word ("Alexa") or pressing any button; it auto-stops after 60 s.
 - **Lamp relay** voice control (GPIO 12), as before.
+- **Music from your own library**: run `tools/music-server/robothings_music_server.py`
+  on a PC with your songs, then say "Alexa, Tum Hi Ho chalao". Saying "Alexa" pauses,
+  the song resumes after the chat. Tools `self.music.*`.
 - **India time (IST)** by default: the clock is synced from internet time (SNTP) and
   kept at UTC+05:30. Another zone can be set by voice (tool `self.clock.set_timezone`).
 
