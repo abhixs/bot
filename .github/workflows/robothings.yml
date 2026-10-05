@@ -54,14 +54,16 @@ jobs:
       - name: Build both display variants
         shell: bash
         run: |
-          set -e
+          set -eo pipefail
+          # On failure, surface the error lines as annotations (readable without logs).
+          trap 'grep -hE "error:|Error|FAILED|Traceback|skip " build*.log wake*.log 2>/dev/null | tail -15 | while IFS= read -r l; do echo "::error::$l"; done' ERR
           source "$IDF_PATH/export.sh"
           OUT=robothings-firmware
           mkdir -p "$OUT"
           for VARIANT in robothings-s3-mini robothings-s3-mini-sh1106; do
             rm -rf build sdkconfig
             python scripts/build.py robothings-s3-mini --name "$VARIANT" \
-              --language "$LANGUAGE" --wake-word "$WAKE_WORD"
+              --language "$LANGUAGE" --wake-word "$WAKE_WORD" 2>&1 | tee "build-$VARIANT.log"
             if [ "$VARIANT" = robothings-s3-mini ]; then DIR=firmware; else DIR=firmware-sh1106; fi
             mkdir -p "$OUT/$DIR"
             cp build/bootloader/bootloader.bin            "$OUT/$DIR/"
@@ -77,7 +79,7 @@ jobs:
             echo "- $VARIANT: app $APP / $((0x2F0000)) bytes, assets $ASSETS / $((0x100000)) bytes" >> "$GITHUB_STEP_SUMMARY"
           done
           # One assets image per wake word, for switching the wake word by voice.
-          python tools/wakeword-assets/make_wakeword_assets.py "$OUT/wakewords"
+          python tools/wakeword-assets/make_wakeword_assets.py "$OUT/wakewords" 2>&1 | tee wakewords.log
           echo "- wake words: $(python -c "import json;print(', '.join(w['name'] for w in json.load(open('$OUT/wakewords/index.json'))))")" >> "$GITHUB_STEP_SUMMARY"
           cp flasher/index.html flasher/manifest.json flasher/manifest-sh1106.json flasher/README.md "$OUT/"
           cp -r tools/music-server "$OUT/music-server"
