@@ -11,6 +11,7 @@
 #include "mcp_server.h"
 #include "music_player.h"
 #include "robo_eyes_display.h"
+#include "wake_word_switch.h"
 #include "wifi_board.h"
 
 #include <driver/gpio.h>
@@ -198,6 +199,7 @@ private:
     void InitializeTools() {
         lamp_ = new RelayLamp(LAMP_GPIO);
         ClockSync::GetInstance().Initialize();  // keep the clock on IST
+        RegisterWakeWordTools();
 
         auto& music = MusicPlayer::GetInstance();
         music.OnNowPlaying([this](const std::string& title) {

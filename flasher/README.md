@@ -31,6 +31,22 @@ with a new board `robothings-s3-mini`.
 "Alexa" (ESP-SR model `wn9_alexa`). Another one can be chosen when running the
 workflow manually (Actions -> Build RoboThings firmware -> Run workflow).
 
+## Change the wake word by voice
+
+Say "Alexa, change your wake word to Jarvis". Available names: Alexa, Hi ESP, Jarvis,
+Computer, Sophia, Mycroft, Hi Joy, Hi Jason, Hi Andy, Hey Willow, Hey Wanda, Hey Ivy,
+Hey Kira, Hi Lily, Hi Telly, Hi Wall E, Nihao Xiaozhi. The device restarts, downloads
+the new voice model from this GitHub Pages site (`wakewords/`, about 0.6 MB), restarts
+once more and then answers to the new name. Any other name is not possible: each
+wake word is a trained model and only one fits in the 4 MB flash at a time.
+
+## Time
+
+The device clock is synced from the internet and kept on IST. The AI is told to use
+the `self.clock.get_time` tool for the time. For best results also add this line to
+the role description on xiaozhi.me: *"The user lives in India (IST, UTC+5:30). For the
+current time or date always call self.clock.get_time."*
+
 ## Wiring (unchanged from the original firmware)
 
 | Part | Pin | ESP32-S3 |

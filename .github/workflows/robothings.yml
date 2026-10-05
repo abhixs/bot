@@ -42,6 +42,15 @@ jobs:
             echo "- online music (Jamendo): using the default client ID from the code" >> "$GITHUB_STEP_SUMMARY"
           fi
 
+      - name: Build settings (wake word download URL)
+        shell: bash
+        run: |
+          OWNER=$(echo "${{ github.repository_owner }}" | tr 'A-Z' 'a-z')
+          REPO="${{ github.event.repository.name }}"
+          printf '#pragma once\n#define WAKEWORD_ASSETS_URL "https://%s.github.io/%s/wakewords/"\n' "$OWNER" "$REPO" \
+            > main/boards/robothings-s3-mini/robothings_build_config.h
+          cat main/boards/robothings-s3-mini/robothings_build_config.h
+
       - name: Build both display variants
         shell: bash
         run: |
@@ -67,6 +76,9 @@ jobs:
             test "$ASSETS" -le $((0x100000))
             echo "- $VARIANT: app $APP / $((0x2F0000)) bytes, assets $ASSETS / $((0x100000)) bytes" >> "$GITHUB_STEP_SUMMARY"
           done
+          # One assets image per wake word, for switching the wake word by voice.
+          python tools/wakeword-assets/make_wakeword_assets.py "$OUT/wakewords"
+          echo "- wake words: $(python -c "import json;print(', '.join(w['name'] for w in json.load(open('$OUT/wakewords/index.json'))))")" >> "$GITHUB_STEP_SUMMARY"
           cp flasher/index.html flasher/manifest.json flasher/manifest-sh1106.json flasher/README.md "$OUT/"
           cp -r tools/music-server "$OUT/music-server"
           echo "- language: $LANGUAGE, wake word: $WAKE_WORD" >> "$GITHUB_STEP_SUMMARY"

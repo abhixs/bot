@@ -1,5 +1,5 @@
-// RoboEyes: two round "eye sockets" on a 128x64 monochrome OLED with a small
-// symbol inside each one (bar, square, arc, cross, heart, dots...), following the
+// RoboEyes: two eyes on a 128x64 monochrome OLED, each shown as a small
+// symbol (bar, square, arc, cross, heart, dots...), following the
 // RoboThings expression sheet: happy, sad, excited, thinking, speaking, sleeping,
 // angry, surprised, wink, blush, loading, curious, tease, confused, in love,
 // shocked, annoyed, focused, happy-closed and sweet.

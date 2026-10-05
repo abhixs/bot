@@ -453,20 +453,9 @@ void RoboEyes::Draw(lv_layer_t* layer) {
     const int32_t ox = coords.x1;
     const int32_t oy = coords.y1;
 
-    // Sockets: thin rings that touch the left and right edges.
+    // The sockets themselves are not drawn: only the symbols show, placed where
+    // the 12.2 mm eyes sit (touching the screen edges, 5 mm apart).
     const int32_t d = eye_diameter_;
-    for (int32_t cx : {left_cx_, right_cx_}) {
-        lv_draw_rect_dsc_t ring;
-        lv_draw_rect_dsc_init(&ring);
-        ring.bg_opa = LV_OPA_TRANSP;
-        ring.border_color = on_;
-        ring.border_opa = LV_OPA_COVER;
-        ring.border_width = ring_width_;
-        ring.radius = LV_RADIUS_CIRCLE;
-        lv_area_t area = {ox + cx - d / 2, oy + eye_cy_ - d / 2, ox + cx - d / 2 + d - 1,
-                          oy + eye_cy_ - d / 2 + d - 1};
-        lv_draw_rect(layer, &ring, &area);
-    }
 
     EyeGlyph left, right;
     GlyphsFor(shown_mood_, left, right);

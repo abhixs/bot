@@ -3,6 +3,7 @@
 #include "mcp_server.h"
 #include "settings.h"
 
+#include <cJSON.h>
 #include <esp_log.h>
 #include <esp_sntp.h>
 #include <sys/time.h>
@@ -36,6 +37,30 @@ void ClockSync::Initialize() {
         [this](const PropertyList& properties) -> ToolResult {
             SetOffsetMinutes(properties["utc_offset_minutes"].value<int>());
             return true;
+        });
+
+    McpServer::GetInstance().AddTool(
+        "self.clock.get_time",
+        "Get the current local date, time and weekday where the user is (India, IST by "
+        "default). ALWAYS call this to answer questions about the time, date or day, and before "
+        "talking about 'today' or 'tomorrow': your own clock may be in a different time zone.",
+        PropertyList(), [this](const PropertyList&) -> ToolResult {
+            time_t now = time(nullptr);
+            if (now < kMinValidUtc) {
+                return std::unexpected(std::string("Device clock is not synced yet."));
+            }
+            struct tm local;
+            gmtime_r(&now, &local);  // the clock already holds local wall time
+            char buf[96];
+            strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M (%A)", &local);
+            int offset = offset_minutes_;
+            char zone[16];
+            snprintf(zone, sizeof(zone), "UTC%+d:%02d", offset / 60, std::abs(offset % 60));
+            cJSON* result = cJSON_CreateObject();
+            cJSON_AddStringToObject(result, "local_time", buf);
+            cJSON_AddStringToObject(result, "time_zone", offset == 330 ? "IST (UTC+5:30)" : zone);
+            cJSON_AddBoolToObject(result, "internet_time_synced", ref_utc_s_ != 0);
+            return result;
         });
 
     esp_timer_create_args_t args = {

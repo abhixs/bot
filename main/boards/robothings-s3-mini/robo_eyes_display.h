@@ -14,8 +14,9 @@
 
 class RoboEyesDisplay : public LvglDisplay {
 public:
-    // Idle this long and the eyes fall asleep (cosmetic only: wake word stays on).
-    static constexpr uint32_t kSleepAfterMs = 120 * 1000;
+    // In standby (idle) the eyes fall asleep after this short pause (cosmetic only:
+    // the wake word stays on).
+    static constexpr uint32_t kSleepAfterMs = 3 * 1000;
 
     RoboEyesDisplay(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_handle_t panel, int width,
                     int height, bool mirror_x, bool mirror_y);
