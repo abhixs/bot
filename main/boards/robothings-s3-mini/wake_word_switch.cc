@@ -3,6 +3,7 @@
 #include "application.h"
 #include "assets.h"
 #include "board.h"
+#include "display.h"
 #include "mcp_server.h"
 #include "settings.h"
 
