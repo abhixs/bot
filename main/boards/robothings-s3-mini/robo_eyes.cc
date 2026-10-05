@@ -16,11 +16,21 @@ float Approach(float current, float target, uint32_t elapsed_ms, float tau_ms) {
 
 bool Equals(const char* a, const char* b) { return a != nullptr && strcmp(a, b) == 0; }
 
+int32_t Round(float v) { return static_cast<int32_t>(std::lround(v)); }
+
 }  // namespace
 
 RoboEyes::RoboEyes(lv_obj_t* parent, int32_t width, int32_t height, lv_color_t on,
                    lv_color_t off)
     : width_(width), height_(height), on_(on), off_(off) {
+    // 5 mm gap on a 128 px wide, 29.4 mm panel = 22 px; sockets touch the edges.
+    const int32_t gap = (width_ * 22 + 64) / 128;
+    eye_diameter_ = std::min<int32_t>((width_ - gap) / 2, height_ - 2);
+    left_cx_ = eye_diameter_ / 2;
+    right_cx_ = width_ - 1 - eye_diameter_ / 2;
+    eye_cy_ = height_ / 2;
+    ring_width_ = eye_diameter_ >= 40 ? 2 : 1;
+
     obj_ = lv_obj_create(parent);
     lv_obj_remove_style_all(obj_);
     lv_obj_set_size(obj_, width_, height_);
@@ -29,9 +39,6 @@ RoboEyes::RoboEyes(lv_obj_t* parent, int32_t width, int32_t height, lv_color_t o
     lv_obj_remove_flag(obj_, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_remove_flag(obj_, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(obj_, DrawEventCb, LV_EVENT_DRAW_MAIN, this);
-
-    // Start from the neutral pose so the first frame is already correct.
-    BuildTarget(current_);
 }
 
 RoboEyes::~RoboEyes() {
@@ -42,37 +49,41 @@ RoboEyes::~RoboEyes() {
 }
 
 RoboEyes::Mood RoboEyes::MoodFromEmotion(const char* e) {
-    if (e == nullptr) return Mood::Neutral;
-    if (Equals(e, "happy") || Equals(e, "relaxed") || Equals(e, "confident") ||
-        Equals(e, "delicious") || Equals(e, "kissy"))
-        return Mood::Happy;
-    if (Equals(e, "laughing") || Equals(e, "funny") || Equals(e, "silly") || Equals(e, "laugh"))
-        return Mood::Laughing;
-    if (Equals(e, "sad") || Equals(e, "embarrassed") || Equals(e, "cloud_off") ||
-        Equals(e, "cancel"))
+    if (e == nullptr) return Mood::Focused;
+    // Names from the expression sheet
+    if (Equals(e, "excited") || Equals(e, "laughing") || Equals(e, "laugh")) return Mood::Excited;
+    if (Equals(e, "happy")) return Mood::Happy;
+    if (Equals(e, "sad") || Equals(e, "crying") || Equals(e, "cry") || Equals(e, "cancel") ||
+        Equals(e, "cloud_off"))
         return Mood::Sad;
-    if (Equals(e, "crying") || Equals(e, "cry")) return Mood::Crying;
+    if (Equals(e, "thinking") || Equals(e, "think")) return Mood::Thinking;
+    if (Equals(e, "speaking")) return Mood::Speaking;
+    if (Equals(e, "sleeping") || Equals(e, "sleepy")) return Mood::Sleeping;
     if (Equals(e, "angry")) return Mood::Angry;
-    if (Equals(e, "surprised") || Equals(e, "shocked") || Equals(e, "surprise") ||
-        Equals(e, "warning"))
-        return Mood::Surprised;
-    if (Equals(e, "sleepy")) return Mood::Sleepy;
-    if (Equals(e, "loving") || Equals(e, "love")) return Mood::Love;
-    if (Equals(e, "thinking") || Equals(e, "think") || Equals(e, "download") ||
-        Equals(e, "cloud_download"))
-        return Mood::Thinking;
-    if (Equals(e, "confused") || Equals(e, "gear") || Equals(e, "link")) return Mood::Confused;
-    if (Equals(e, "winking") || Equals(e, "wink")) return Mood::Winking;
-    if (Equals(e, "cool")) return Mood::Cool;
-    if (Equals(e, "alarm")) return Mood::Alarm;
-    return Mood::Neutral;
+    if (Equals(e, "surprised") || Equals(e, "surprise")) return Mood::Surprised;
+    if (Equals(e, "wink") || Equals(e, "winking")) return Mood::Wink;
+    if (Equals(e, "blush") || Equals(e, "embarrassed")) return Mood::Blush;
+    if (Equals(e, "loading") || Equals(e, "download") || Equals(e, "cloud_download") ||
+        Equals(e, "gear") || Equals(e, "link"))
+        return Mood::Loading;
+    if (Equals(e, "curious")) return Mood::Curious;
+    if (Equals(e, "tease") || Equals(e, "funny") || Equals(e, "silly") || Equals(e, "delicious"))
+        return Mood::Tease;
+    if (Equals(e, "confused")) return Mood::Confused;
+    if (Equals(e, "in_love") || Equals(e, "loving") || Equals(e, "love")) return Mood::InLove;
+    if (Equals(e, "shocked") || Equals(e, "warning") || Equals(e, "alarm")) return Mood::Shocked;
+    if (Equals(e, "annoyed") || Equals(e, "cool")) return Mood::Annoyed;
+    if (Equals(e, "happy_closed") || Equals(e, "relaxed")) return Mood::HappyClosed;
+    if (Equals(e, "sweet") || Equals(e, "kissy")) return Mood::Sweet;
+    // neutral, focused, confident and anything unknown
+    return Mood::Focused;
 }
 
 void RoboEyes::SetEmotion(const char* emotion) { SetMood(MoodFromEmotion(emotion)); }
 
 void RoboEyes::SetMood(Mood mood) {
-    if (mood == Mood::Winking && mood_ != Mood::Winking) {
-        wink_until_ms_ = time_ms_ + 700;
+    if (mood == Mood::Wink && mood_ != Mood::Wink) {
+        wink_until_ms_ = time_ms_ + 900;
     }
     mood_ = mood;
 }
@@ -80,9 +91,7 @@ void RoboEyes::SetMood(Mood mood) {
 void RoboEyes::SetActivity(Activity activity) {
     if (activity == activity_) return;
     activity_ = activity;
-    // A fresh blink makes every state change feel alive.
     if (activity == Activity::Listening || activity == Activity::Speaking) {
-        blink_elapsed_ms_ = 0;
         gaze_target_x_ = 0;
         gaze_target_y_ = 0;
     }
@@ -97,42 +106,149 @@ float RoboEyes::RandomRange(float lo, float hi) {
     return lo + (hi - lo) * static_cast<float>(Random() % 10000) / 10000.0f;
 }
 
-void RoboEyes::UpdateIdleBehavior(uint32_t elapsed_ms) {
-    // Blink scheduling (not while asleep).
+RoboEyes::Mood RoboEyes::EffectiveMood() const {
+    switch (activity_) {
+        case Activity::Alarm:
+            return Mood::Shocked;
+        case Activity::Sleeping:
+            return Mood::Sleeping;
+        case Activity::Setup:
+        case Activity::Thinking:
+            return Mood::Loading;
+        case Activity::Music:
+            return Mood::HappyClosed;
+        case Activity::Speaking:
+            return mood_ == Mood::Focused ? Mood::Speaking : mood_;
+        default:
+            break;
+    }
+    if (mood_ == Mood::Wink && time_ms_ > wink_until_ms_) return Mood::Happy;
+    return mood_;
+}
+
+// Symbol sizes are designed for a 53 px socket and scaled for other sizes.
+void RoboEyes::GlyphsFor(Mood mood, EyeGlyph& l, EyeGlyph& r) const {
+    auto make = [](Glyph glyph, float w, float h, float radius = 0, float dx = 0, float dy = 0) {
+        EyeGlyph g;
+        g.glyph = glyph;
+        g.w = w;
+        g.h = h;
+        g.radius = radius;
+        g.dx = dx;
+        g.dy = dy;
+        return g;
+    };
+    switch (mood) {
+        case Mood::Focused:
+            l = r = make(Glyph::Square, 11, 11, 2);
+            break;
+        case Mood::Happy:
+            l = r = make(Glyph::Bar, 24, 6, 3);
+            break;
+        case Mood::Sad:
+            l = make(Glyph::Square, 11, 11, 2, -4, 6);
+            r = make(Glyph::Square, 11, 11, 2, 4, 6);
+            break;
+        case Mood::Excited:
+            l = r = make(Glyph::Arc, 22, 5, 0, 0, 4);
+            break;
+        case Mood::Thinking:
+            l = make(Glyph::Square, 11, 11, 2, -7, -4);
+            r = make(Glyph::Square, 11, 11, 2, 6, -4);
+            break;
+        case Mood::Speaking:
+        case Mood::Confused:
+            l = r = make(Glyph::Cross, 15, 4);
+            break;
+        case Mood::Sleeping:
+            l = r = make(Glyph::Cross, 14, 4);
+            break;
+        case Mood::Angry:
+            l = r = make(Glyph::HalfDisc, 24, 9, 0, 0, 3);
+            break;
+        case Mood::Surprised:
+            l = r = make(Glyph::Square, 26, 26, 6);
+            break;
+        case Mood::Wink:
+            l = make(Glyph::Bar, 22, 6, 3);
+            r = make(Glyph::Square, 22, 22, 4);
+            break;
+        case Mood::Blush:
+            l = r = make(Glyph::Dots4, 10, 3.5f);
+            break;
+        case Mood::Loading:
+            l = r = make(Glyph::Spinner, 20, 2);
+            break;
+        case Mood::Curious:
+            l = r = make(Glyph::Square, 11, 11, 2, -6, 2);
+            break;
+        case Mood::Tease:
+            l = r = make(Glyph::HalfDisc, 26, 12, 0, 0, 2);
+            break;
+        case Mood::InLove:
+            l = r = make(Glyph::Heart, 22, 22);
+            break;
+        case Mood::Shocked:
+            l = r = make(Glyph::Square, 28, 28, 4);
+            break;
+        case Mood::Annoyed:
+            l = r = make(Glyph::Bar, 26, 6, 3, 0, -1);
+            break;
+        case Mood::HappyClosed:
+            l = r = make(Glyph::Arc, 24, 4, 0, 0, 4);
+            break;
+        case Mood::Sweet:
+            l = r = make(Glyph::Equals, 22, 4, 2);
+            break;
+    }
+    const float k = eye_diameter_ / 53.0f;
+    for (EyeGlyph* g : {&l, &r}) {
+        g->w *= k;
+        g->h *= k;
+        g->radius *= k;
+        g->dx *= k;
+        g->dy *= k;
+    }
+}
+
+void RoboEyes::UpdateBehavior(uint32_t elapsed_ms) {
+    const Mood mood = EffectiveMood();
+
+    // Blink (not while asleep or loading).
     if (blink_elapsed_ms_ >= 0) {
         blink_elapsed_ms_ += static_cast<int32_t>(elapsed_ms);
         if (blink_elapsed_ms_ > 160) {
             blink_elapsed_ms_ = double_blink_ ? 0 : -1;
             double_blink_ = false;
         }
-    } else if (time_ms_ >= next_blink_ms_) {
+    } else if (time_ms_ >= next_blink_ms_ && mood != Mood::Sleeping && mood != Mood::Loading) {
         blink_elapsed_ms_ = 0;
         double_blink_ = (Random() % 5) == 0;
-        uint32_t base = activity_ == Activity::Listening ? 3500 : 2200;
-        next_blink_ms_ = time_ms_ + base + Random() % 3800;
+        next_blink_ms_ = time_ms_ + 2200 + Random() % 3800;
     }
 
-    // Gaze: wander while idle, sweep while thinking, look at the user otherwise.
-    if (activity_ == Activity::Idle) {
+    // Gaze: the pupils wander while idle and look at the user otherwise.
+    const bool wander = activity_ == Activity::Idle &&
+                        (mood == Mood::Focused || mood == Mood::Curious || mood == Mood::Surprised);
+    if (wander) {
         if (time_ms_ >= next_gaze_ms_) {
             if (Random() % 3 == 0) {
                 gaze_target_x_ = 0;
                 gaze_target_y_ = 0;
             } else {
-                gaze_target_x_ = RandomRange(-12.0f, 12.0f);
+                gaze_target_x_ = RandomRange(-8.0f, 8.0f);
                 gaze_target_y_ = RandomRange(-5.0f, 5.0f);
             }
             next_gaze_ms_ = time_ms_ + 1200 + Random() % 3000;
         }
-    } else if (activity_ == Activity::Thinking || activity_ == Activity::Setup) {
-        gaze_target_x_ = std::sin(time_ms_ / 650.0f) * 12.0f;
-        gaze_target_y_ = -3.0f + std::sin(time_ms_ / 1300.0f) * 2.0f;
     } else {
         gaze_target_x_ = 0;
         gaze_target_y_ = 0;
     }
+    gaze_x_ = Approach(gaze_x_, gaze_target_x_, elapsed_ms, 90.0f);
+    gaze_y_ = Approach(gaze_y_, gaze_target_y_, elapsed_ms, 90.0f);
 
-    // Speaking: random "syllables" make the eyes bob with the voice.
+    // Speaking: random "syllables" make the symbols pulse with the voice.
     if (activity_ == Activity::Speaking) {
         if (time_ms_ >= next_syllable_ms_) {
             static const float kLevels[] = {0.0f, 0.35f, 0.6f, 1.0f};
@@ -143,169 +259,28 @@ void RoboEyes::UpdateIdleBehavior(uint32_t elapsed_ms) {
         speak_target_ = 0;
     }
     speak_level_ = Approach(speak_level_, speak_target_, elapsed_ms, 45.0f);
-}
 
-void RoboEyes::BuildTarget(Pose& t) {
-    const float base_h = height_ * 0.72f;  // 34 px on a 48 px tall area
-    const float base_w = base_h;
-    const float base_r = base_h * 0.27f;
-
-    EyeShape eye;
-    eye.w = base_w;
-    eye.h = base_h;
-    eye.radius = base_r;
-    t.left = eye;
-    t.right = eye;
-    t.gaze_x = gaze_target_x_;
-    t.gaze_y = gaze_target_y_;
-    t.heart = 0;
-
-    Mood mood = mood_;
-    if (activity_ == Activity::Alarm) mood = Mood::Alarm;
-    if (activity_ == Activity::Sleeping) mood = Mood::Sleepy;
-    if (mood == Mood::Winking && time_ms_ > wink_until_ms_) mood = Mood::Happy;
-
-    switch (mood) {
-        case Mood::Neutral:
-            break;
-        case Mood::Happy:
-            t.left.lid_bottom = t.right.lid_bottom = 0.55f;
-            t.gaze_y -= 2;
-            break;
-        case Mood::Laughing:
-            t.left.lid_bottom = t.right.lid_bottom = 0.6f;
-            t.left.w = t.right.w = base_w + 2;
-            t.gaze_y += std::sin(time_ms_ / 55.0f) * 2.5f - 2;
-            break;
-        case Mood::Sad:
-            t.left.lid_outer = t.right.lid_outer = 0.5f;
-            t.left.h = t.right.h = base_h - 4;
-            t.gaze_y += 4;
-            t.gaze_x *= 0.3f;
-            break;
-        case Mood::Crying:
-            // Eyes sit higher and smaller to leave room for the falling tears.
-            t.left.lid_outer = t.right.lid_outer = 0.5f;
-            t.left.h = t.right.h = base_h - 10;
-            t.gaze_y = -6;
-            t.gaze_x = 0;
-            break;
-        case Mood::Angry:
-            t.left.lid_inner = t.right.lid_inner = 0.55f;
-            t.left.w = t.right.w = base_w + 3;
-            t.left.h = t.right.h = base_h - 4;
-            break;
-        case Mood::Surprised:
-            t.left.w = t.right.w = base_w - 4;
-            t.left.h = t.right.h = std::min<float>(height_ - 4, base_h + 9);
-            t.left.radius = t.right.radius = base_r * 1.8f;
-            t.gaze_x *= 0.3f;
-            break;
-        case Mood::Sleepy:
-            t.left.open = t.right.open = 0.06f;
-            t.left.lid_outer = t.right.lid_outer = 0.3f;
-            t.gaze_x = 0;
-            t.gaze_y = 5 + std::sin(time_ms_ / 900.0f) * 1.5f;  // slow breathing
-            break;
-        case Mood::Love: {
-            t.heart = 1;
-            float pulse = 1.0f + 0.12f * std::max(0.0f, std::sin(time_ms_ / 160.0f));
-            t.left.w = t.right.w = base_w * pulse;
-            t.left.h = t.right.h = base_h * pulse;
-            t.gaze_x *= 0.4f;
-            break;
+    // Expression change: squash the old symbol, then open the new one.
+    if (swap_elapsed_ms_ < 0 && mood != shown_mood_) {
+        swap_elapsed_ms_ = 0;
+    }
+    if (swap_elapsed_ms_ >= 0) {
+        int32_t before = swap_elapsed_ms_;
+        swap_elapsed_ms_ += static_cast<int32_t>(elapsed_ms);
+        if (before < kSwapHalfMs && swap_elapsed_ms_ >= kSwapHalfMs) {
+            shown_mood_ = mood;  // fully squashed: switch symbols
         }
-        case Mood::Thinking:
-            t.left.lid_outer = 0.25f;
-            t.right.h = base_h - 6;
-            t.gaze_x = 9;
-            t.gaze_y = -6;
-            break;
-        case Mood::Confused:
-            t.right.h = base_h - 12;
-            t.right.lid_inner = 0.3f;
-            t.gaze_x = std::sin(time_ms_ / 400.0f) * 6.0f;
-            break;
-        case Mood::Winking:
-            t.left.lid_bottom = 0.5f;
-            t.right.open = 0.05f;
-            break;
-        case Mood::Cool:
-            // Wide, flat "visor" eyes.
-            t.left.w = t.right.w = base_w + 8;
-            t.left.h = t.right.h = base_h * 0.45f;
-            t.left.radius = t.right.radius = 3;
-            t.gaze_x *= 0.5f;
-            break;
-        case Mood::Alarm:
-            t.left.w = t.right.w = base_w - 2;
-            t.left.h = t.right.h = std::min<float>(height_ - 4, base_h + 9);
-            t.left.radius = t.right.radius = base_r * 1.6f;
-            t.gaze_x = std::sin(time_ms_ / 22.0f) * 3.0f;  // shake
-            t.gaze_y = 0;
-            break;
-    }
-
-    // Activity overlays.
-    if (activity_ == Activity::Music && mood != Mood::Alarm) {
-        // Bob on a ~110 BPM beat and sway gently side to side.
-        float beat = std::fabs(std::sin(time_ms_ * kPi / 545.0f));
-        t.gaze_y += 1.0f - beat * 3.0f;
-        t.gaze_x = std::sin(time_ms_ * kPi / 1090.0f) * 5.0f;
-        if (mood == Mood::Neutral) {
-            t.left.lid_bottom = t.right.lid_bottom = 0.45f;
+        if (swap_elapsed_ms_ >= 2 * kSwapHalfMs) {
+            swap_elapsed_ms_ = -1;
+            shown_mood_ = mood;
         }
-    }
-    if (activity_ == Activity::Listening && mood != Mood::Sleepy) {
-        float pulse = std::sin(time_ms_ / 330.0f) * 1.5f;
-        t.left.h += 3 + pulse;
-        t.right.h += 3 + pulse;
-        t.left.w += 2;
-        t.right.w += 2;
-    }
-    if (activity_ == Activity::Speaking) {
-        float bounce = speak_level_ * 3.0f;
-        t.gaze_y -= bounce;
-        t.left.h -= bounce * 0.8f;
-        t.right.h -= bounce * 0.8f;
-    }
-
-    // Blink overrides openness for a moment.
-    if (blink_elapsed_ms_ >= 0 && mood != Mood::Sleepy) {
-        float phase = std::min(1.0f, blink_elapsed_ms_ / 160.0f);
-        float closed = std::sin(phase * kPi);  // 0 -> 1 -> 0
-        t.left.open = std::min(t.left.open, 1.0f - closed * 0.95f);
-        t.right.open = std::min(t.right.open, 1.0f - closed * 0.95f);
     }
 }
 
 void RoboEyes::Tick(uint32_t elapsed_ms) {
     if (obj_ == nullptr) return;
     time_ms_ += elapsed_ms;
-    UpdateIdleBehavior(elapsed_ms);
-
-    Pose target;
-    BuildTarget(target);
-
-    const float tau = 70.0f;
-    auto ease = [elapsed_ms, tau](EyeShape& c, const EyeShape& t) {
-        c.w = Approach(c.w, t.w, elapsed_ms, tau);
-        c.h = Approach(c.h, t.h, elapsed_ms, tau);
-        c.radius = Approach(c.radius, t.radius, elapsed_ms, tau);
-        c.dx = Approach(c.dx, t.dx, elapsed_ms, tau);
-        c.dy = Approach(c.dy, t.dy, elapsed_ms, tau);
-        c.lid_outer = Approach(c.lid_outer, t.lid_outer, elapsed_ms, tau);
-        c.lid_inner = Approach(c.lid_inner, t.lid_inner, elapsed_ms, tau);
-        c.lid_bottom = Approach(c.lid_bottom, t.lid_bottom, elapsed_ms, tau);
-        // Blinks need to be snappy, so openness follows almost directly.
-        c.open = Approach(c.open, t.open, elapsed_ms, 18.0f);
-    };
-    ease(current_.left, target.left);
-    ease(current_.right, target.right);
-    current_.gaze_x = Approach(current_.gaze_x, target.gaze_x, elapsed_ms, 110.0f);
-    current_.gaze_y = Approach(current_.gaze_y, target.gaze_y, elapsed_ms, 110.0f);
-    current_.heart = target.heart;  // shape switch is instant, size eases
-
+    UpdateBehavior(elapsed_ms);
     lv_obj_invalidate(obj_);
 }
 
@@ -316,6 +291,8 @@ void RoboEyes::DrawEventCb(lv_event_t* e) {
         self->Draw(layer);
     }
 }
+
+// ---------------------------------------------------------------- primitives
 
 void RoboEyes::FillRect(lv_layer_t* layer, int32_t x1, int32_t y1, int32_t x2, int32_t y2,
                         int32_t radius, lv_color_t color) {
@@ -332,11 +309,15 @@ void RoboEyes::FillRect(lv_layer_t* layer, int32_t x1, int32_t y1, int32_t x2, i
     lv_draw_rect(layer, &dsc, &area);
 }
 
+void RoboEyes::FillCircle(lv_layer_t* layer, int32_t cx, int32_t cy, int32_t r, lv_color_t color) {
+    FillRect(layer, cx - r, cy - r, cx + r, cy + r, LV_RADIUS_CIRCLE, color);
+}
+
 void RoboEyes::FillTriangle(lv_layer_t* layer, int32_t x0, int32_t y0, int32_t x1, int32_t y1,
-                            int32_t x2, int32_t y2, lv_color_t color) {
+                            int32_t x2, int32_t y2) {
     lv_draw_triangle_dsc_t dsc;
     lv_draw_triangle_dsc_init(&dsc);
-    dsc.color = color;
+    dsc.color = on_;
     dsc.opa = LV_OPA_COVER;
     dsc.p[0].x = x0;
     dsc.p[0].y = y0;
@@ -347,73 +328,122 @@ void RoboEyes::FillTriangle(lv_layer_t* layer, int32_t x0, int32_t y0, int32_t x
     lv_draw_triangle(layer, &dsc);
 }
 
-void RoboEyes::DrawHeart(lv_layer_t* layer, int32_t cx, int32_t cy, int32_t size) {
-    int32_t r = size / 4 + 1;
-    int32_t top = cy - size / 4;
-    // Two round lobes and a point at the bottom.
-    FillRect(layer, cx - 2 * r + 1, top - r, cx + 1, top + r, LV_RADIUS_CIRCLE, on_);
-    FillRect(layer, cx - 1, top - r, cx + 2 * r - 1, top + r, LV_RADIUS_CIRCLE, on_);
-    FillTriangle(layer, cx - 2 * r + 1, top + r / 3, cx + 2 * r - 1, top + r / 3, cx,
-                 cy + size / 2, on_);
-}
-
-void RoboEyes::DrawZ(lv_layer_t* layer, int32_t x, int32_t y, int32_t size) {
+void RoboEyes::DrawLine(lv_layer_t* layer, int32_t x0, int32_t y0, int32_t x1, int32_t y1,
+                        int32_t width) {
     lv_draw_line_dsc_t dsc;
     lv_draw_line_dsc_init(&dsc);
     dsc.color = on_;
-    dsc.width = 1;
+    dsc.width = width;
     dsc.opa = LV_OPA_COVER;
-    auto line = [&](int32_t ax, int32_t ay, int32_t bx, int32_t by) {
-        dsc.p1.x = ax;
-        dsc.p1.y = ay;
-        dsc.p2.x = bx;
-        dsc.p2.y = by;
-        lv_draw_line(layer, &dsc);
-    };
-    line(x, y, x + size, y);
-    line(x + size, y, x, y + size);
-    line(x, y + size, x + size, y + size);
+    dsc.round_start = 1;
+    dsc.round_end = 1;
+    dsc.p1.x = x0;
+    dsc.p1.y = y0;
+    dsc.p2.x = x1;
+    dsc.p2.y = y1;
+    lv_draw_line(layer, &dsc);
 }
 
-void RoboEyes::DrawEye(lv_layer_t* layer, int32_t cx, int32_t cy, const EyeShape& eye,
-                       bool is_left, float heart) {
-    int32_t w = std::max<int32_t>(4, static_cast<int32_t>(eye.w + 0.5f));
-    int32_t full_h = std::max<int32_t>(2, static_cast<int32_t>(eye.h + 0.5f));
-    int32_t h = std::max<int32_t>(2, static_cast<int32_t>(eye.h * eye.open + 0.5f));
-    cx += static_cast<int32_t>(eye.dx);
-    cy += static_cast<int32_t>(eye.dy);
+// ---------------------------------------------------------------- symbols
 
-    if (heart > 0.5f && eye.open > 0.5f) {
-        DrawHeart(layer, cx, cy, std::min(w, full_h));
+void RoboEyes::DrawGlyph(lv_layer_t* layer, int32_t cx, int32_t cy, const EyeGlyph& g,
+                         float scale, float scale_y) {
+    const float w = g.w * scale;
+    const float h = g.h * scale;
+
+    // Nearly shut (blink or expression swap): every symbol becomes a thin line.
+    if (scale_y < 0.3f && g.glyph != Glyph::Spinner) {
+        const int32_t half = std::max<int32_t>(2, Round(std::max(w, h * 0.6f) / 2));
+        FillRect(layer, cx - half, cy - 1, cx + half, cy + 1, 1, on_);
         return;
     }
 
-    int32_t x1 = cx - w / 2;
-    int32_t x2 = x1 + w - 1;
-    int32_t y1 = cy - h / 2;
-    int32_t y2 = y1 + h - 1;
-    int32_t radius = std::min<int32_t>(static_cast<int32_t>(eye.radius), std::min(w, h) / 2);
-    if (h <= 4) radius = 1;
-    FillRect(layer, x1, y1, x2, y2, radius, on_);
-
-    if (h <= 4) return;  // closed: just a line, no eyelids needed
-
-    // The "outer" side is away from the nose: left side of the left eye.
-    int32_t outer_x = is_left ? x1 - 1 : x2 + 1;
-    int32_t inner_x = is_left ? x2 + 1 : x1 - 1;
-
-    if (eye.lid_outer > 0.02f) {
-        int32_t drop = static_cast<int32_t>(eye.lid_outer * h);
-        FillTriangle(layer, x1 - 1, y1 - 1, x2 + 1, y1 - 1, outer_x, y1 + drop, off_);
-    }
-    if (eye.lid_inner > 0.02f) {
-        int32_t drop = static_cast<int32_t>(eye.lid_inner * h);
-        FillTriangle(layer, x1 - 1, y1 - 1, x2 + 1, y1 - 1, inner_x, y1 + drop, off_);
-    }
-    if (eye.lid_bottom > 0.02f) {
-        // A big rounded "cheek" pushes up from below and leaves an arched ^ shape.
-        int32_t cut = static_cast<int32_t>(eye.lid_bottom * h);
-        FillRect(layer, x1 - 3, y2 - cut, x2 + 3, y2 + h, w / 2 + 2, off_);
+    switch (g.glyph) {
+        case Glyph::Bar:
+        case Glyph::Square: {
+            const int32_t hw = Round(w / 2);
+            const int32_t hh = std::max<int32_t>(1, Round(h * scale_y / 2));
+            const int32_t radius = std::min<int32_t>(Round(g.radius * scale), std::min(hw, hh));
+            FillRect(layer, cx - hw, cy - hh, cx + hw - 1, cy + hh - 1, radius, on_);
+            break;
+        }
+        case Glyph::Arc: {
+            // An upside-down U: "^" happy eyes.
+            const int32_t radius = Round(w / 2);
+            const int32_t stroke = std::max<int32_t>(2, Round(h));
+            lv_draw_arc_dsc_t dsc;
+            lv_draw_arc_dsc_init(&dsc);
+            dsc.color = on_;
+            dsc.opa = LV_OPA_COVER;
+            dsc.width = stroke;
+            dsc.rounded = 1;
+            dsc.start_angle = 180;
+            dsc.end_angle = 360;
+            dsc.center.x = cx;
+            dsc.center.y = cy + Round(radius * (1.0f - scale_y) * 0.5f);
+            dsc.radius = static_cast<uint16_t>(radius);
+            lv_draw_arc(layer, &dsc);
+            break;
+        }
+        case Glyph::Cross: {
+            const int32_t sx = Round(w / 2);
+            const int32_t sy = std::max<int32_t>(1, Round(w / 2 * scale_y));
+            const int32_t stroke = std::max<int32_t>(2, Round(h));
+            DrawLine(layer, cx - sx, cy - sy, cx + sx, cy + sy, stroke);
+            DrawLine(layer, cx - sx, cy + sy, cx + sx, cy - sy, stroke);
+            break;
+        }
+        case Glyph::HalfDisc: {
+            // Flat on top, round at the bottom.
+            const int32_t hw = Round(w / 2);
+            const int32_t hh = std::max<int32_t>(2, Round(h * scale_y));
+            const int32_t top = cy - hh / 2;
+            FillRect(layer, cx - hw, top - hh, cx + hw - 1, top + hh, hh, on_);
+            FillRect(layer, cx - hw - 1, top - hh - 1, cx + hw, top - 1, 0, off_);
+            break;
+        }
+        case Glyph::Dots4: {
+            const int32_t r = std::max<int32_t>(1, Round(h));
+            const int32_t ox = Round(w / 2);
+            const int32_t oy = std::max<int32_t>(1, Round(w / 2 * scale_y));
+            FillCircle(layer, cx - ox, cy - oy, r, on_);
+            FillCircle(layer, cx + ox, cy - oy, r, on_);
+            FillCircle(layer, cx - ox, cy + oy, r, on_);
+            FillCircle(layer, cx + ox, cy + oy, r, on_);
+            break;
+        }
+        case Glyph::Spinner: {
+            // Eight dots in a ring; a two-dot gap travels around.
+            const float ring = w / 2;
+            const int32_t r = std::max<int32_t>(1, Round(h));
+            const int gap = static_cast<int>((time_ms_ / 110) % 8);
+            for (int i = 0; i < 8; i++) {
+                if (i == gap || i == (gap + 1) % 8) continue;
+                float a = i * kPi / 4;
+                FillCircle(layer, cx + Round(std::cos(a) * ring), cy + Round(std::sin(a) * ring), r,
+                           on_);
+            }
+            break;
+        }
+        case Glyph::Heart: {
+            const int32_t size = Round(w);
+            const int32_t r = size / 4 + 1;
+            const int32_t sy_size = Round(size * scale_y);
+            const int32_t top = cy - sy_size / 4;
+            FillCircle(layer, cx - r + 1, top, r, on_);
+            FillCircle(layer, cx + r - 1, top, r, on_);
+            FillTriangle(layer, cx - 2 * r + 1, top + r / 3, cx + 2 * r - 1, top + r / 3, cx,
+                         cy + sy_size / 2);
+            break;
+        }
+        case Glyph::Equals: {
+            const int32_t hw = Round(w / 2);
+            const int32_t bar = std::max<int32_t>(2, Round(h));
+            const int32_t spread = std::max<int32_t>(bar, Round((h + g.radius * 1.5f) * scale_y));
+            FillRect(layer, cx - hw, cy - spread - bar / 2, cx + hw - 1, cy - spread + bar / 2, 1, on_);
+            FillRect(layer, cx - hw, cy + spread - bar / 2, cx + hw - 1, cy + spread + bar / 2, 1, on_);
+            break;
+        }
     }
 }
 
@@ -422,53 +452,82 @@ void RoboEyes::Draw(lv_layer_t* layer) {
     lv_obj_get_coords(obj_, &coords);
     const int32_t ox = coords.x1;
     const int32_t oy = coords.y1;
-    const int32_t cx = ox + width_ / 2 + static_cast<int32_t>(current_.gaze_x);
-    const int32_t cy = oy + height_ / 2 + static_cast<int32_t>(current_.gaze_y);
 
-    // Eye spacing follows eye width so bigger eyes do not overlap.
-    const float spacing = std::max(current_.left.w, current_.right.w) / 2.0f + height_ * 0.3f;
-    const int32_t left_cx = cx - static_cast<int32_t>(spacing);
-    const int32_t right_cx = cx + static_cast<int32_t>(spacing);
-
-    DrawEye(layer, left_cx, cy, current_.left, true, current_.heart);
-    DrawEye(layer, right_cx, cy, current_.right, false, current_.heart);
-
-    Mood mood = activity_ == Activity::Sleeping ? Mood::Sleepy : mood_;
-    if (activity_ == Activity::Alarm) mood = Mood::Alarm;
-
-    if (mood == Mood::Sleepy) {
-        // Three Zs float up from the right eye and fade out at the top.
-        for (int i = 0; i < 3; i++) {
-            uint32_t phase = (time_ms_ + i * 700) % 2100;
-            int32_t rise = static_cast<int32_t>(phase * (height_ - 8) / 2100);
-            int32_t size = 3 + i;
-            int32_t zx = right_cx + static_cast<int32_t>(current_.right.w / 2) + 2 + i * 4;
-            int32_t zy = oy + height_ - 10 - rise;
-            if (zy > oy) DrawZ(layer, zx, zy, size);
-        }
+    // Sockets: thin rings that touch the left and right edges.
+    const int32_t d = eye_diameter_;
+    for (int32_t cx : {left_cx_, right_cx_}) {
+        lv_draw_rect_dsc_t ring;
+        lv_draw_rect_dsc_init(&ring);
+        ring.bg_opa = LV_OPA_TRANSP;
+        ring.border_color = on_;
+        ring.border_opa = LV_OPA_COVER;
+        ring.border_width = ring_width_;
+        ring.radius = LV_RADIUS_CIRCLE;
+        lv_area_t area = {ox + cx - d / 2, oy + eye_cy_ - d / 2, ox + cx - d / 2 + d - 1,
+                          oy + eye_cy_ - d / 2 + d - 1};
+        lv_draw_rect(layer, &ring, &area);
     }
 
-    if (mood == Mood::Crying) {
-        // Tears drip from the outer corners.
-        for (int side = 0; side < 2; side++) {
-            const EyeShape& eye = side == 0 ? current_.left : current_.right;
-            int32_t ex = side == 0 ? left_cx - static_cast<int32_t>(eye.w / 2) + 2
-                                   : right_cx + static_cast<int32_t>(eye.w / 2) - 6;
-            int32_t start = cy + static_cast<int32_t>(eye.h / 2) + 1;
-            int32_t travel = std::max<int32_t>(4, oy + height_ - 7 - start);
-            uint32_t phase = (time_ms_ + side * 500) % 1000;
-            int32_t ty = start + static_cast<int32_t>(phase * travel / 1000);
-            FillRect(layer, ex, ty, ex + 3, ty + 5, 2, on_);
-        }
+    EyeGlyph left, right;
+    GlyphsFor(shown_mood_, left, right);
+
+    // Vertical squash from blink and expression swaps.
+    float scale_y = 1.0f;
+    if (blink_elapsed_ms_ >= 0) {
+        float phase = std::min(1.0f, blink_elapsed_ms_ / 160.0f);
+        scale_y = std::min(scale_y, 1.0f - 0.95f * std::sin(phase * kPi));
+    }
+    if (swap_elapsed_ms_ >= 0) {
+        float t = static_cast<float>(swap_elapsed_ms_) / kSwapHalfMs;  // 0..2
+        scale_y = std::min(scale_y, t < 1.0f ? 1.0f - t : t - 1.0f);
     }
 
-    if (mood == Mood::Alarm && (time_ms_ / 250) % 2 == 0) {
-        // Flashing "!" marks next to the eyes.
-        int32_t lx = ox + 3;
-        int32_t rx = ox + width_ - 6;
-        for (int32_t x : {lx, rx}) {
-            FillRect(layer, x, cy - 10, x + 2, cy + 3, 1, on_);
-            FillRect(layer, x, cy + 6, x + 2, cy + 8, 1, on_);
+    // Size pulses and whole-face motion per activity / mood.
+    float scale = 1.0f;
+    float move_x = gaze_x_;
+    float move_y = gaze_y_;
+    const Mood mood = shown_mood_;
+    switch (activity_) {
+        case Activity::Listening:
+            scale = 1.15f + 0.05f * std::sin(time_ms_ / 330.0f);
+            break;
+        case Activity::Speaking:
+            scale = 1.0f + 0.25f * speak_level_;
+            move_y -= speak_level_ * 2.0f;
+            break;
+        case Activity::Music: {
+            float beat = std::fabs(std::sin(time_ms_ * kPi / 545.0f));
+            move_y += 2.0f - beat * 4.0f;
+            move_x += std::sin(time_ms_ * kPi / 1090.0f) * 4.0f;
+            break;
         }
+        case Activity::Alarm:
+            move_x += std::sin(time_ms_ / 22.0f) * 3.0f;  // shaking
+            break;
+        default:
+            break;
     }
+    if (mood == Mood::Sleeping) {
+        scale_y = std::min(scale_y, 0.85f + 0.15f * std::sin(time_ms_ / 900.0f));  // breathing
+    }
+    if (mood == Mood::InLove) {
+        scale *= 1.0f + 0.12f * std::max(0.0f, std::sin(time_ms_ / 160.0f));
+    }
+
+    // Keep each symbol inside its socket.
+    const float inner = d / 2.0f - ring_width_ - 2.0f;
+    auto place = [&](int32_t socket_cx, const EyeGlyph& g) {
+        float half = std::max(g.w, g.glyph == Glyph::Arc ? g.w / 2 : g.h) * scale / 2.0f;
+        float limit = std::max(0.0f, inner - half);
+        float x = g.dx + move_x;
+        float y = g.dy + move_y;
+        float dist = std::sqrt(x * x + y * y);
+        if (dist > limit && dist > 0.0f) {
+            x *= limit / dist;
+            y *= limit / dist;
+        }
+        DrawGlyph(layer, ox + socket_cx + Round(x), oy + eye_cy_ + Round(y), g, scale, scale_y);
+    };
+    place(left_cx_, left);
+    place(right_cx_, right);
 }

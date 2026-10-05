@@ -137,6 +137,7 @@ void RoboEyesDisplay::SetupUI() {
     lv_obj_set_flex_align(top_bar_, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER,
                           LV_FLEX_ALIGN_CENTER);
     lv_obj_remove_flag(top_bar_, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(top_bar_, LV_OBJ_FLAG_HIDDEN);  // icons kept for the base class, not shown
 
     network_label_ = lv_label_create(top_bar_);
     lv_label_set_text(network_label_, "");
@@ -155,15 +156,18 @@ void RoboEyesDisplay::SetupUI() {
     lv_label_set_text(battery_label_, "");
     lv_obj_set_style_text_font(battery_label_, icon_font, 0);
 
-    // Status text overlaps the top bar, centered (clock, state, subtitles).
+    // Text strip drawn over the top of the eyes when there is something to read.
     status_bar_ = lv_obj_create(screen);
     lv_obj_remove_style_all(status_bar_);
-    lv_obj_set_size(status_bar_, LV_HOR_RES - 32, kStatusBarHeight);
+    lv_obj_set_size(status_bar_, LV_HOR_RES, kStatusBarHeight);
     lv_obj_align(status_bar_, LV_ALIGN_TOP_MID, 0, 0);
+    lv_obj_set_style_bg_color(status_bar_, kPixelOff, 0);
+    lv_obj_set_style_bg_opa(status_bar_, LV_OPA_COVER, 0);
     lv_obj_remove_flag(status_bar_, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(status_bar_, LV_OBJ_FLAG_HIDDEN);
 
     notification_label_ = lv_label_create(status_bar_);
-    lv_obj_set_width(notification_label_, LV_HOR_RES - 32);
+    lv_obj_set_width(notification_label_, LV_HOR_RES - 4);
     lv_label_set_long_mode(notification_label_, LV_LABEL_LONG_MODE_SCROLL_CIRCULAR);
     lv_obj_set_style_text_align(notification_label_, LV_TEXT_ALIGN_CENTER, 0);
     lv_label_set_text(notification_label_, "");
@@ -171,17 +175,16 @@ void RoboEyesDisplay::SetupUI() {
     lv_obj_add_flag(notification_label_, LV_OBJ_FLAG_HIDDEN);
 
     status_label_ = lv_label_create(status_bar_);
-    lv_obj_set_width(status_label_, LV_HOR_RES - 32);
+    lv_obj_set_width(status_label_, LV_HOR_RES - 4);
     lv_label_set_long_mode(status_label_, LV_LABEL_LONG_MODE_SCROLL_CIRCULAR);
     lv_obj_set_style_text_align(status_label_, LV_TEXT_ALIGN_CENTER, 0);
     lv_label_set_text(status_label_, Lang::Strings::INITIALIZING);
     lv_obj_align(status_label_, LV_ALIGN_CENTER, 0, 0);
 
-    // Eyes fill the rest of the screen.
-    eyes_ = std::make_unique<RoboEyes>(screen, width_, height_ - kStatusBarHeight, kPixelOn,
-                                       kPixelOff);
-    lv_obj_align(eyes_->obj(), LV_ALIGN_TOP_LEFT, 0, kStatusBarHeight);
-    lv_obj_move_to_index(eyes_->obj(), 0);  // keep the status bar drawn on top
+    // Eyes fill the whole screen.
+    eyes_ = std::make_unique<RoboEyes>(screen, width_, height_, kPixelOn, kPixelOff);
+    lv_obj_align(eyes_->obj(), LV_ALIGN_TOP_LEFT, 0, 0);
+    lv_obj_move_to_index(eyes_->obj(), 0);  // the text strip is drawn on top
 
     animation_timer_ = lv_timer_create(AnimationTimerCb, kFrameMs, this);
 }
@@ -209,11 +212,27 @@ void RoboEyesDisplay::Animate(uint32_t elapsed_ms) {
 
     RoboEyes::Activity activity = RoboEyes::Activity::Idle;
     const bool music_showing = music_active_ && state == kDeviceStateIdle && !alarm_active_;
-    if (music_showing && !showing_music_text_ && status_label_ != nullptr) {
-        lv_label_set_text(status_label_, music_text_.c_str());
-        lv_obj_remove_flag(status_label_, LV_OBJ_FLAG_HIDDEN);
+
+    // Text strip: only when there is something to read.
+    if (status_bar_ != nullptr) {
+        const bool setup_state = state == kDeviceStateStarting ||
+                                 state == kDeviceStateWifiConfiguring ||
+                                 state == kDeviceStateActivating ||
+                                 state == kDeviceStateUpgrading ||
+                                 state == kDeviceStateAudioTesting ||
+                                 state == kDeviceStateFatalError;
+        const bool notifying = notification_label_ != nullptr &&
+                               !lv_obj_has_flag(notification_label_, LV_OBJ_FLAG_HIDDEN);
+        const bool timed = static_cast<int32_t>(overlay_until_ms_ - lv_tick_get()) > 0;
+        const bool visible = alarm_active_ || setup_state || notifying || timed;
+        if (visible != !lv_obj_has_flag(status_bar_, LV_OBJ_FLAG_HIDDEN)) {
+            if (visible) {
+                lv_obj_remove_flag(status_bar_, LV_OBJ_FLAG_HIDDEN);
+            } else {
+                lv_obj_add_flag(status_bar_, LV_OBJ_FLAG_HIDDEN);
+            }
+        }
     }
-    showing_music_text_ = music_showing;
 
     if (alarm_active_) {
         activity = RoboEyes::Activity::Alarm;
@@ -252,17 +271,17 @@ void RoboEyesDisplay::SetStatus(const char* status) {
     if (alarm_active_) {
         return;  // the alarm banner stays pinned until it is cleared
     }
-    if (music_active_ && Application::GetInstance().GetDeviceState() == kDeviceStateIdle) {
-        return;  // keep the song title instead of the idle clock
+    if (music_active_ && static_cast<int32_t>(overlay_until_ms_ - lv_tick_get()) > 0) {
+        return;  // keep the song title on screen for its few seconds
     }
-    showing_music_text_ = false;
     LvglDisplay::SetStatus(status);
 }
 
 void RoboEyesDisplay::SetChatMessage(const char* role, const char* content) {
-    // No room for a chat area: subtitles and system messages (like the
-    // activation code) scroll through the status line instead.
-    if (content == nullptr || content[0] == '\0' || alarm_active_) {
+    // The face fills the screen, so only system messages (activation code,
+    // errors) are shown, scrolling through the text strip for a while.
+    if (content == nullptr || content[0] == '\0' || alarm_active_ || role == nullptr ||
+        strcmp(role, "system") != 0) {
         return;
     }
     std::string text = content;
@@ -276,7 +295,10 @@ void RoboEyesDisplay::SetChatMessage(const char* role, const char* content) {
     if (notification_label_ != nullptr) {
         lv_obj_add_flag(notification_label_, LV_OBJ_FLAG_HIDDEN);
     }
+    ShowOverlayFor(15000);
 }
+
+void RoboEyesDisplay::ShowOverlayFor(uint32_t ms) { overlay_until_ms_ = lv_tick_get() + ms; }
 
 void RoboEyesDisplay::SetEmotion(const char* emotion) {
     DisplayLockGuard lock(this);
@@ -330,9 +352,14 @@ void RoboEyesDisplay::ClearAlarmBanner() {
 void RoboEyesDisplay::SetNowPlaying(const std::string& title) {
     DisplayLockGuard lock(this);
     music_active_ = true;
-    music_text_ = "Playing: " + title;
-    showing_music_text_ = false;  // the next frame puts the title in the status line
     idle_ms_ = 0;
+    if (status_label_ != nullptr && !alarm_active_) {
+        std::string text = "Playing: " + title;
+        lv_label_set_text(status_label_, text.c_str());
+        lv_obj_remove_flag(status_label_, LV_OBJ_FLAG_HIDDEN);
+        if (notification_label_ != nullptr) lv_obj_add_flag(notification_label_, LV_OBJ_FLAG_HIDDEN);
+        ShowOverlayFor(6000);
+    }
 }
 
 void RoboEyesDisplay::ClearNowPlaying() {
@@ -340,7 +367,7 @@ void RoboEyesDisplay::ClearNowPlaying() {
         DisplayLockGuard lock(this);
         if (!music_active_) return;
         music_active_ = false;
-        showing_music_text_ = false;
+        overlay_until_ms_ = lv_tick_get();
         last_displayed_clock_min_ = -1;
     }
     if (Application::GetInstance().GetDeviceState() == kDeviceStateIdle) {

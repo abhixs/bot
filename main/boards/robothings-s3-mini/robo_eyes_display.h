@@ -1,5 +1,6 @@
-// 128x64 SSD1306 display for the RoboThings S3 Mini: a 16 px status bar on top
-// (clock / status / subtitles, Wi-Fi, mute) and animated RoboEyes below it.
+// 128x64 OLED display for the RoboThings S3 Mini: full-screen RoboEyes, with a
+// 16 px text strip on top that only appears for alarms, notifications, setup
+// messages (Wi-Fi, activation code) and the song title.
 #pragma once
 
 #include "lvgl_display.h"
@@ -54,8 +55,10 @@ private:
 
     bool alarm_active_ = false;
     bool music_active_ = false;
-    bool showing_music_text_ = false;
-    std::string music_text_;
+    // The status strip covers the top of the eyes, so it only appears when it has
+    // something worth reading: until this tick (lv_tick), or while pinned below.
+    uint32_t overlay_until_ms_ = 0;
+    void ShowOverlayFor(uint32_t ms);
     bool power_save_ = false;
     uint32_t idle_ms_ = 0;
     int last_state_ = -1;
