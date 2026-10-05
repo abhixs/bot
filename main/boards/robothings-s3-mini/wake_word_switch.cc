@@ -1,6 +1,8 @@
 #include "wake_word_switch.h"
 
 #include "application.h"
+#include "assets.h"
+#include "board.h"
 #include "mcp_server.h"
 #include "settings.h"
 
@@ -9,12 +11,14 @@
 #include <esp_timer.h>
 
 #include <cctype>
+#include <cstring>
 #include <string>
 
 #define TAG "WakeWordSwitch"
 
 // Base URL of the published wake-word assets, written by CI into
-// robothings_build_config.h (e.g. https://<user>.github.io/<repo>/wakewords/).
+// robothings_build_config.h. It points at the raw files of the gh-pages branch
+// (raw.githubusercontent.com), so it works even when GitHub Pages is switched off.
 #if __has_include("robothings_build_config.h")
 #include "robothings_build_config.h"
 #endif
@@ -84,6 +88,33 @@ std::string NameList() {
     return list;
 }
 
+// The wake word that is really installed: look for a known model name inside the
+// srmodels.bin of the assets partition.
+const WakeWord* InstalledWakeWord() {
+    void* ptr = nullptr;
+    size_t size = 0;
+    if (!Assets::GetInstance().GetAssetData("srmodels.bin", ptr, size) || ptr == nullptr) {
+        return nullptr;
+    }
+    const char* data = static_cast<const char*>(ptr);
+    for (const auto& w : kWakeWords) {
+        const size_t len = strlen(w.model);
+        // Match the exact model name (not a prefix of a longer one, e.g. tts vs tts2).
+        for (const char* p = static_cast<const char*>(memmem(data, size, w.model, len)); p != nullptr;
+             p = static_cast<const char*>(memmem(p + 1, size - (p + 1 - data), w.model, len))) {
+            const size_t end = (p - data) + len;
+            if (end >= size || !isalnum(static_cast<unsigned char>(data[end]))) return &w;
+            if (p + 1 >= data + size) break;
+        }
+    }
+    return nullptr;
+}
+
+std::string InstalledName() {
+    const WakeWord* w = InstalledWakeWord();
+    return w != nullptr ? w->name : "Alexa";
+}
+
 void RebootSoon() {
     // Give the assistant time to say the confirmation before restarting.
     static esp_timer_handle_t timer = nullptr;
@@ -118,12 +149,24 @@ void StartPendingSwitchWatcher() {
                 auto& app = Application::GetInstance();
                 if (app.GetDeviceState() != kDeviceStateIdle) return;
                 Settings assets("assets", false);
-                if (!assets.GetString("download_url", "").empty()) return;  // not downloaded yet
+                if (!assets.GetString("download_url", "").empty()) return;  // not tried yet
+                std::string pending;
                 {
                     Settings wake("wakeword", true);
+                    pending = wake.GetString("pending", "");
                     wake.EraseKey("pending");
                 }
                 esp_timer_stop(timer);
+                const WakeWord* installed = InstalledWakeWord();
+                if (installed == nullptr || pending != installed->model) {
+                    ESP_LOGW(TAG, "Wake word download failed, keeping the old one");
+                    app.Schedule([]() {
+                        if (auto display = Board::GetInstance().GetDisplay()) {
+                            display->ShowNotification("Wake word change failed", 6000);
+                        }
+                    });
+                    return;
+                }
                 ESP_LOGI(TAG, "New wake word downloaded, restarting to load it");
                 app.Schedule([]() { Application::GetInstance().Reboot(); });
             },
@@ -148,10 +191,8 @@ void RegisterWakeWordTools() {
     mcp.AddTool("self.wake_word.get",
                 "Get the device's current wake word and the wake words it can switch to.",
                 PropertyList(), [names](const PropertyList&) -> ToolResult {
-                    Settings settings("wakeword", false);
                     cJSON* result = cJSON_CreateObject();
-                    cJSON_AddStringToObject(result, "current",
-                                            settings.GetString("name", "Alexa").c_str());
+                    cJSON_AddStringToObject(result, "current", InstalledName().c_str());
                     cJSON_AddStringToObject(result, "available", names.c_str());
                     return result;
                 });
@@ -175,8 +216,7 @@ void RegisterWakeWordTools() {
                 return std::unexpected("That wake word is not available. Possible names: " +
                                        names + ".");
             }
-            Settings current("wakeword", false);
-            if (current.GetString("name", "Alexa") == word->name) {
+            if (InstalledName() == word->name) {
                 return std::string("{\"success\":true,\"note\":\"already using this wake word\"}");
             }
             {
@@ -185,7 +225,6 @@ void RegisterWakeWordTools() {
             }
             {
                 Settings settings("wakeword", true);
-                settings.SetString("name", word->name);
                 settings.SetString("pending", word->model);
             }
             ESP_LOGI(TAG, "Switching wake word to %s (%s)", word->name, word->model);

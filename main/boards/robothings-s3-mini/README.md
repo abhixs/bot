@@ -49,7 +49,8 @@ workflow manually (Actions -> Build RoboThings firmware -> Run workflow).
 Say "Alexa, change your wake word to Jarvis". Available names: Alexa, Hi ESP, Jarvis,
 Computer, Sophia, Mycroft, Hi Joy, Hi Jason, Hi Andy, Hey Willow, Hey Wanda, Hey Ivy,
 Hey Kira, Hi Lily, Hi Telly, Hi Wall E, Nihao Xiaozhi. The device restarts, downloads
-the new voice model from this GitHub Pages site (`wakewords/`, about 0.6 MB), restarts
+the new voice model from the repository's `gh-pages` branch (`wakewords/`, about
+0.55 MB, via raw.githubusercontent.com so GitHub Pages does not need to be on), restarts
 once more and then answers to the new name. Any other name is not possible: each
 wake word is a trained model and only one fits in the 4 MB flash at a time.
 

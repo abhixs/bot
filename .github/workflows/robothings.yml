@@ -45,9 +45,9 @@ jobs:
       - name: Build settings (wake word download URL)
         shell: bash
         run: |
-          OWNER=$(echo "${{ github.repository_owner }}" | tr 'A-Z' 'a-z')
+          OWNER="${{ github.repository_owner }}"
           REPO="${{ github.event.repository.name }}"
-          printf '#pragma once\n#define WAKEWORD_ASSETS_URL "https://%s.github.io/%s/wakewords/"\n' "$OWNER" "$REPO" \
+          printf '#pragma once\n#define WAKEWORD_ASSETS_URL "https://raw.githubusercontent.com/%s/%s/gh-pages/wakewords/"\n' "$OWNER" "$REPO" \
             > main/boards/robothings-s3-mini/robothings_build_config.h
           cat main/boards/robothings-s3-mini/robothings_build_config.h
 
