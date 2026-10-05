@@ -43,9 +43,12 @@ def find_assets_command(build_dir):
     """Return (cwd, argv) of the build_default_assets.py call in build.ninja."""
     with open(os.path.join(build_dir, "build.ninja"), encoding="utf-8") as f:
         for line in f:
-            if "build_default_assets.py" not in line or "COMMAND" not in line:
+            stripped = line.strip()
+            # Only the "  COMMAND = cd ... && python build_default_assets.py ..." variable,
+            # not the "build ...: CUSTOM_COMMAND ..." statement line.
+            if not stripped.startswith("COMMAND = ") or "build_default_assets.py" not in stripped:
                 continue
-            command = line.split("=", 1)[1].strip()
+            command = stripped[len("COMMAND = "):]
             cwd = None
             for part in command.split(" && "):
                 part = part.strip()
@@ -70,6 +73,7 @@ def main():
     build_dir = os.path.abspath("build")
     os.makedirs(out_dir, exist_ok=True)
     cwd, argv = find_assets_command(build_dir)
+    print("assets command (cwd=%s): %s" % (cwd, " ".join(argv)))
     sdkconfig = argv[argv.index("--sdkconfig") + 1]
     model_root = argv[argv.index("--esp_sr_model_path") + 1] if "--esp_sr_model_path" in argv else ""
     with open(sdkconfig, encoding="utf-8") as f:
