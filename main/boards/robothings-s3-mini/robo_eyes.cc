@@ -53,9 +53,8 @@ RoboEyes::Mood RoboEyes::MoodFromEmotion(const char* e) {
     // Names from the expression sheet
     if (Equals(e, "excited") || Equals(e, "laughing") || Equals(e, "laugh")) return Mood::Excited;
     if (Equals(e, "happy")) return Mood::Happy;
-    if (Equals(e, "sad") || Equals(e, "crying") || Equals(e, "cry") || Equals(e, "cancel") ||
-        Equals(e, "cloud_off"))
-        return Mood::Sad;
+    if (Equals(e, "crying") || Equals(e, "cry")) return Mood::Crying;
+    if (Equals(e, "sad") || Equals(e, "cancel") || Equals(e, "cloud_off")) return Mood::Sad;
     if (Equals(e, "thinking") || Equals(e, "think")) return Mood::Thinking;
     if (Equals(e, "speaking")) return Mood::Speaking;
     if (Equals(e, "sleeping") || Equals(e, "sleepy")) return Mood::Sleeping;
@@ -149,6 +148,10 @@ void RoboEyes::GlyphsFor(Mood mood, EyeGlyph& l, EyeGlyph& r) const {
             l = make(Glyph::Square, 11, 11, 2, -4, 6);
             r = make(Glyph::Square, 11, 11, 2, 4, 6);
             break;
+        case Mood::Crying:
+            l = make(Glyph::Square, 11, 11, 2, -3, -4);
+            r = make(Glyph::Square, 11, 11, 2, 3, -4);
+            break;
         case Mood::Excited:
             l = r = make(Glyph::Arc, 22, 5, 0, 0, 4);
             break;
@@ -221,7 +224,9 @@ void RoboEyes::UpdateBehavior(uint32_t elapsed_ms) {
             blink_elapsed_ms_ = double_blink_ ? 0 : -1;
             double_blink_ = false;
         }
-    } else if (time_ms_ >= next_blink_ms_ && mood != Mood::Sleeping && mood != Mood::Loading) {
+    } else if (time_ms_ >= next_blink_ms_ && mood != Mood::Sleeping && mood != Mood::Loading &&
+               mood != Mood::Speaking && mood != Mood::Confused && activity_ != Activity::Speaking) {
+        // (no blinking on the cross symbols or while talking: it reads as jitter)
         blink_elapsed_ms_ = 0;
         double_blink_ = (Random() % 5) == 0;
         next_blink_ms_ = time_ms_ + 2200 + Random() % 3800;
@@ -236,17 +241,17 @@ void RoboEyes::UpdateBehavior(uint32_t elapsed_ms) {
                 gaze_target_x_ = 0;
                 gaze_target_y_ = 0;
             } else {
-                gaze_target_x_ = RandomRange(-8.0f, 8.0f);
-                gaze_target_y_ = RandomRange(-5.0f, 5.0f);
+                gaze_target_x_ = RandomRange(-7.0f, 7.0f);
+                gaze_target_y_ = RandomRange(-4.0f, 4.0f);
             }
-            next_gaze_ms_ = time_ms_ + 1200 + Random() % 3000;
+            next_gaze_ms_ = time_ms_ + 2500 + Random() % 3500;
         }
     } else {
         gaze_target_x_ = 0;
         gaze_target_y_ = 0;
     }
-    gaze_x_ = Approach(gaze_x_, gaze_target_x_, elapsed_ms, 90.0f);
-    gaze_y_ = Approach(gaze_y_, gaze_target_y_, elapsed_ms, 90.0f);
+    gaze_x_ = Approach(gaze_x_, gaze_target_x_, elapsed_ms, 260.0f);
+    gaze_y_ = Approach(gaze_y_, gaze_target_y_, elapsed_ms, 260.0f);
 
     // Speaking: random "syllables" make the symbols pulse with the voice.
     if (activity_ == Activity::Speaking) {
@@ -478,16 +483,17 @@ void RoboEyes::Draw(lv_layer_t* layer) {
     const Mood mood = shown_mood_;
     switch (activity_) {
         case Activity::Listening:
-            scale = 1.15f + 0.05f * std::sin(time_ms_ / 330.0f);
+            // Slightly bigger and steady, with a very slow "breath".
+            scale = 1.12f + 0.03f * std::sin(time_ms_ * 2.0f * kPi / 2400.0f);
             break;
         case Activity::Speaking:
-            scale = 1.0f + 0.25f * speak_level_;
-            move_y -= speak_level_ * 2.0f;
+            // Calm, even pulse instead of random jumps: no position change at all.
+            scale = 1.0f + 0.12f * (0.5f - 0.5f * std::cos(time_ms_ * 2.0f * kPi / 1200.0f));
             break;
         case Activity::Music: {
-            float beat = std::fabs(std::sin(time_ms_ * kPi / 545.0f));
-            move_y += 2.0f - beat * 4.0f;
-            move_x += std::sin(time_ms_ * kPi / 1090.0f) * 4.0f;
+            float beat = 0.5f - 0.5f * std::cos(time_ms_ * 2.0f * kPi / 1090.0f);
+            move_y += 1.5f - beat * 3.0f;
+            move_x += std::sin(time_ms_ * kPi / 2180.0f) * 3.0f;
             break;
         }
         case Activity::Alarm:
@@ -519,4 +525,21 @@ void RoboEyes::Draw(lv_layer_t* layer) {
     };
     place(left_cx_, left);
     place(right_cx_, right);
+
+    if (mood == Mood::Crying && scale_y > 0.6f) {
+        // A tear slides down below each pupil, one after the other.
+        const float k = d / 53.0f;
+        for (int side = 0; side < 2; side++) {
+            const EyeGlyph& g = side == 0 ? left : right;
+            const int32_t socket_cx = side == 0 ? left_cx_ : right_cx_;
+            const uint32_t phase = (time_ms_ + side * 600) % 1200;
+            const float start = g.dy + g.h / 2 + 3 * k;
+            const float travel = d / 2.0f - 6 * k - start;
+            const int32_t tx = ox + socket_cx + Round(g.dx + (side == 0 ? -2 : 2) * k);
+            const int32_t ty = oy + eye_cy_ + Round(start + travel * phase / 1200.0f);
+            const int32_t tw = std::max<int32_t>(2, Round(3 * k));
+            const int32_t th = std::max<int32_t>(3, Round(5 * k));
+            FillRect(layer, tx - tw / 2, ty, tx - tw / 2 + tw - 1, ty + th - 1, tw / 2, on_);
+        }
+    }
 }

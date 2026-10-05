@@ -50,6 +50,9 @@ public:
     void OnRingStop(std::function<void()> cb) { on_ring_stop_ = std::move(cb); }
 
     bool IsRinging() const { return ringing_; }
+    // Seconds until the soonest running timer ends (for the on-screen countdown),
+    // or -1 when no timer is running.
+    int SecondsToNextTimer();
     // Stops a ringing alarm. With snooze_minutes > 0 it rings again later.
     void StopRinging(int snooze_minutes = 0);
 

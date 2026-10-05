@@ -23,6 +23,9 @@ public:
     void Initialize();
     int offset_minutes() const { return offset_minutes_; }
     void SetOffsetMinutes(int minutes);
+    // 12-hour or 24-hour clock on the screen (and in self.clock.get_time).
+    bool use_24h() const { return use_24h_; }
+    void Set24h(bool use_24h);
 
 private:
     ClockSync() = default;
@@ -33,6 +36,7 @@ private:
     esp_timer_handle_t timer_ = nullptr;
     bool sntp_started_ = false;
     std::atomic<int> offset_minutes_{kDefaultOffsetMinutes};
+    std::atomic<bool> use_24h_{false};
     // Reference point from the last SNTP sync: UTC seconds and esp_timer microseconds.
     std::atomic<int64_t> ref_utc_s_{0};
     std::atomic<int64_t> ref_uptime_us_{0};

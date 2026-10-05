@@ -31,6 +31,19 @@ with a new board `robothings-s3-mini`.
 "Alexa" (ESP-SR model `wn9_alexa`). Another one can be chosen when running the
 workflow manually (Actions -> Build RoboThings firmware -> Run workflow).
 
+## Voice shortcuts and screen
+
+- **"Bye", "Bye bye", "Chup raho", "Chup raho ab", "So jao"**: the device stops at once
+  and goes to standby without answering (handled on the device).
+- **"Show clock" / "Clock dikhao"**: the eyes give way to a dot-matrix clock (hours in
+  the left eye, minutes in the right) until you talk again.
+- **"Time format 12 hours / 24 hours pe kar do"**: switches the clock format.
+- **"Pomodoro timer lagao" / "10 minute ka timer"**: while a timer runs and the device
+  is idle, the screen counts down minutes | seconds in the same dot font.
+- **"Roo ke dikhao", "Gussa dikhao", "Dil wali aankhein dikhao"...**: shows that
+  expression (crying, angry, in love, ...) for a few seconds.
+- Standby shows the sleeping eyes.
+
 ## Change the wake word by voice
 
 Say "Alexa, change your wake word to Jarvis". Available names: Alexa, Hi ESP, Jarvis,

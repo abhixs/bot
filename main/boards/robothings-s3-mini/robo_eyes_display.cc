@@ -10,6 +10,8 @@
 #include <esp_lvgl_port.h>
 
 #include <algorithm>
+#include <cstdio>
+#include <ctime>
 #include <cstring>
 
 #define TAG "RoboEyesDisplay"
@@ -186,6 +188,13 @@ void RoboEyesDisplay::SetupUI() {
     lv_obj_align(eyes_->obj(), LV_ALIGN_TOP_LEFT, 0, 0);
     lv_obj_move_to_index(eyes_->obj(), 0);  // the text strip is drawn on top
 
+    // Dot-matrix clock / countdown, drawn where the eyes are; hidden until needed.
+    dot_clock_ = std::make_unique<DotClock>(screen, width_, height_, eyes_->left_cx(),
+                                            eyes_->right_cx(), kPixelOn, kPixelOff);
+    lv_obj_align(dot_clock_->obj(), LV_ALIGN_TOP_LEFT, 0, 0);
+    lv_obj_move_to_index(dot_clock_->obj(), 1);
+    lv_obj_add_flag(dot_clock_->obj(), LV_OBJ_FLAG_HIDDEN);
+
     animation_timer_ = lv_timer_create(AnimationTimerCb, kFrameMs, this);
 }
 
@@ -203,6 +212,40 @@ void RoboEyesDisplay::Animate(uint32_t elapsed_ms) {
     if (static_cast<int>(state) != last_state_) {
         last_state_ = static_cast<int>(state);
         idle_ms_ = 0;
+    }
+    const uint32_t now = lv_tick_get();
+    if (hold_active_ && static_cast<int32_t>(hold_until_ms_ - now) <= 0) {
+        hold_active_ = false;
+    }
+    if (hold_active_) {
+        eyes_->SetMood(hold_mood_);
+        idle_ms_ = 0;  // a requested expression is not replaced by sleep
+    }
+
+    // Clock mode ends when a new conversation starts (wake word / button).
+    if (clock_mode_) {
+        if (state == kDeviceStateIdle) {
+            clock_seen_idle_ = true;
+        } else if (clock_seen_idle_) {
+            clock_mode_ = false;
+        }
+    }
+    const int countdown_s = countdown_ ? countdown_() : -1;
+    const bool show_countdown = countdown_s >= 0 && state == kDeviceStateIdle;
+    const bool show_dots = !alarm_active_ && (show_countdown || clock_mode_);
+    if (show_dots) {
+        UpdateDotFace(!show_countdown, countdown_s);
+        idle_ms_ = 0;
+    }
+    if (show_dots != dots_visible_ && dot_clock_ != nullptr) {
+        dots_visible_ = show_dots;
+        if (show_dots) {
+            lv_obj_remove_flag(dot_clock_->obj(), LV_OBJ_FLAG_HIDDEN);
+            lv_obj_add_flag(eyes_->obj(), LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_add_flag(dot_clock_->obj(), LV_OBJ_FLAG_HIDDEN);
+            lv_obj_remove_flag(eyes_->obj(), LV_OBJ_FLAG_HIDDEN);
+        }
     }
     if (state == kDeviceStateIdle && !alarm_active_ && !music_active_) {
         idle_ms_ = std::min<uint32_t>(idle_ms_ + elapsed_ms, kSleepAfterMs);
@@ -264,7 +307,67 @@ void RoboEyesDisplay::Animate(uint32_t elapsed_ms) {
         }
     }
     eyes_->SetActivity(activity);
-    eyes_->Tick(elapsed_ms);
+    if (!dots_visible_) {
+        eyes_->Tick(elapsed_ms);
+    }
+}
+
+void RoboEyesDisplay::UpdateDotFace(bool show_clock, int countdown_s) {
+    if (dot_clock_ == nullptr) return;
+    auto two = [](int v) {
+        char buf[4];
+        snprintf(buf, sizeof(buf), "%02d", v % 100);
+        return std::string(buf);
+    };
+    const bool blink_on = (lv_tick_get() / 500) % 2 == 0;
+    if (!show_clock) {
+        // Timer / Pomodoro: minutes | seconds (hours | minutes from 100 min up).
+        int minutes = countdown_s / 60;
+        if (minutes >= 100) {
+            dot_clock_->Set(two(minutes / 60), two(minutes % 60), blink_on);
+        } else {
+            dot_clock_->Set(two(minutes), two(countdown_s % 60), true);
+        }
+        return;
+    }
+    time_t t = time(nullptr);
+    if (t < 1735689600) {  // clock not synced yet
+        dot_clock_->Set("--", "--", true);
+        return;
+    }
+    struct tm local;
+    gmtime_r(&t, &local);  // the clock already holds local wall time
+    const bool use_24h = use_24h_ ? use_24h_() : false;
+    std::string hours;
+    if (use_24h) {
+        hours = two(local.tm_hour);
+    } else {
+        int h12 = local.tm_hour % 12 == 0 ? 12 : local.tm_hour % 12;
+        hours = std::to_string(h12);
+    }
+    dot_clock_->Set(hours, two(local.tm_min), blink_on);
+}
+
+bool RoboEyesDisplay::HoldExpression(const std::string& name, int seconds) {
+    RoboEyes::Mood mood = RoboEyes::MoodFromEmotion(name.c_str());
+    if (mood == RoboEyes::Mood::Focused && name != "focused" && name != "neutral") {
+        return false;
+    }
+    DisplayLockGuard lock(this);
+    hold_mood_ = mood;
+    hold_active_ = true;
+    hold_until_ms_ = lv_tick_get() + static_cast<uint32_t>(std::max(1, seconds)) * 1000;
+    clock_mode_ = false;
+    idle_ms_ = 0;
+    if (eyes_ != nullptr) eyes_->SetMood(mood);
+    return true;
+}
+
+void RoboEyesDisplay::ShowClock() {
+    DisplayLockGuard lock(this);
+    clock_mode_ = true;
+    clock_seen_idle_ = Application::GetInstance().GetDeviceState() == kDeviceStateIdle;
+    hold_active_ = false;
 }
 
 void RoboEyesDisplay::SetStatus(const char* status) {
@@ -278,6 +381,15 @@ void RoboEyesDisplay::SetStatus(const char* status) {
 }
 
 void RoboEyesDisplay::SetChatMessage(const char* role, const char* content) {
+    if (role != nullptr && strcmp(role, "user") == 0) {
+        if (content == nullptr || content[0] == '\0') return;
+        {
+            DisplayLockGuard lock(this);
+            clock_mode_ = false;  // talking again brings the eyes back
+        }
+        if (on_user_speech_) on_user_speech_(content);
+        return;
+    }
     // The face fills the screen, so only system messages (activation code,
     // errors) are shown, scrolling through the text strip for a while.
     if (content == nullptr || content[0] == '\0' || alarm_active_ || role == nullptr ||
@@ -302,6 +414,17 @@ void RoboEyesDisplay::ShowOverlayFor(uint32_t ms) { overlay_until_ms_ = lv_tick_
 
 void RoboEyesDisplay::SetEmotion(const char* emotion) {
     DisplayLockGuard lock(this);
+    if (hold_active_) {
+        return;  // an expression the user asked for stays until its time is up
+    }
+    const uint32_t now = lv_tick_get();
+    const bool neutral = emotion == nullptr || strcmp(emotion, "neutral") == 0;
+    if (neutral && now - last_emotion_ms_ < 4000) {
+        return;  // keep the last real emotion a little: no flicking between faces
+    }
+    if (!neutral) {
+        last_emotion_ms_ = now;
+    }
     if (eyes_ != nullptr) {
         eyes_->SetEmotion(emotion);
     }

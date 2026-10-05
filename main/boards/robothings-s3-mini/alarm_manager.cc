@@ -241,8 +241,10 @@ void AlarmManager::RegisterTools() {
 
     mcp.AddTool(
         "self.alarm.set_timer",
-        "Start a countdown timer on the device, e.g. 'set a 10 minute timer' or 'remind me in "
-        "30 seconds'. Give the duration as minutes and/or seconds.",
+        "Start a countdown timer on the device, e.g. 'set a 10 minute timer', 'remind me in "
+        "30 seconds' or a Pomodoro ('pomodoro timer' = 25 minute focus, label 'Focus'; a break "
+        "is 5 minutes, label 'Break'). Give the duration as minutes and/or seconds. While it runs "
+        "the screen shows the remaining minutes and seconds.",
         PropertyList({
             Property("minutes", kPropertyTypeInteger, 0, 0, 1440),
             Property("seconds", kPropertyTypeInteger, 0, 0, 3600),
@@ -329,6 +331,19 @@ void AlarmManager::RegisterTools() {
             Application::GetInstance().Schedule([this, snooze]() { StopRinging(snooze); });
             return true;
         });
+}
+
+int AlarmManager::SecondsToNextTimer() {
+    time_t now = time(nullptr);
+    if (!alarm_schedule::IsTimeValid(now)) return -1;
+    std::lock_guard<std::mutex> lock(mutex_);
+    int64_t best = -1;
+    for (const auto& alarm : alarms_) {
+        if (!alarm.is_timer) continue;
+        int64_t left = std::max<int64_t>(0, alarm.fire_at - static_cast<int64_t>(now));
+        if (best < 0 || left < best) best = left;
+    }
+    return static_cast<int>(best);
 }
 
 void AlarmManager::CheckAlarms() {

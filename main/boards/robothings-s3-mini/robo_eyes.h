@@ -39,6 +39,7 @@ public:
         Annoyed,
         HappyClosed,
         Sweet,
+        Crying,   // sad pupils with falling tears
     };
 
     // What the assistant is doing right now (derived from the device state).
@@ -69,6 +70,8 @@ public:
     void Tick(uint32_t elapsed_ms);
 
     lv_obj_t* obj() const { return obj_; }
+    int32_t left_cx() const { return left_cx_; }
+    int32_t right_cx() const { return right_cx_; }
 
     static Mood MoodFromEmotion(const char* emotion);
 
@@ -117,7 +120,7 @@ private:
     // Expression change: squash the old symbol flat, swap, open the new one.
     Mood shown_mood_ = Mood::Focused;
     int32_t swap_elapsed_ms_ = -1;  // -1 = no swap running
-    static constexpr int32_t kSwapHalfMs = 90;
+    static constexpr int32_t kSwapHalfMs = 130;
 
     uint32_t time_ms_ = 0;
     uint32_t random_state_ = 0x1234567u;

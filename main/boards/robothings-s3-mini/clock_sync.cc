@@ -25,6 +25,7 @@ constexpr int kMaxDriftS = 20;
 void ClockSync::Initialize() {
     Settings settings(kNvsNamespace, false);
     offset_minutes_ = settings.GetInt(kNvsKey, kDefaultOffsetMinutes);
+    use_24h_ = settings.GetBool("clock_24h", false);
 
     McpServer::GetInstance().AddTool(
         "self.clock.set_timezone",
@@ -36,6 +37,20 @@ void ClockSync::Initialize() {
         }),
         [this](const PropertyList& properties) -> ToolResult {
             SetOffsetMinutes(properties["utc_offset_minutes"].value<int>());
+            return true;
+        });
+
+    McpServer::GetInstance().AddTool(
+        "self.clock.set_format",
+        "Switch the clock between 12-hour and 24-hour format, e.g. when the user says 'time "
+        "format 12 hours pe kar do'. hours: 12 or 24.",
+        PropertyList({Property("hours", kPropertyTypeInteger, 12, 24)}),
+        [this](const PropertyList& properties) -> ToolResult {
+            int hours = properties["hours"].value<int>();
+            if (hours != 12 && hours != 24) {
+                return std::unexpected(std::string("hours must be 12 or 24"));
+            }
+            Set24h(hours == 24);
             return true;
         });
 
@@ -52,7 +67,8 @@ void ClockSync::Initialize() {
             struct tm local;
             gmtime_r(&now, &local);  // the clock already holds local wall time
             char buf[96];
-            strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M (%A)", &local);
+            strftime(buf, sizeof(buf),
+                     use_24h_ ? "%Y-%m-%d %H:%M (%A)" : "%Y-%m-%d %I:%M %p (%A)", &local);
             int offset = offset_minutes_;
             char zone[16];
             snprintf(zone, sizeof(zone), "UTC%+d:%02d", offset / 60, std::abs(offset % 60));
@@ -79,6 +95,12 @@ void ClockSync::SetOffsetMinutes(int minutes) {
     Settings settings(kNvsNamespace, true);
     settings.SetInt(kNvsKey, minutes);
     Check();
+}
+
+void ClockSync::Set24h(bool use_24h) {
+    use_24h_ = use_24h;
+    Settings settings(kNvsNamespace, true);
+    settings.SetBool("clock_24h", use_24h);
 }
 
 void ClockSync::OnSntpSync(struct timeval* tv) {
