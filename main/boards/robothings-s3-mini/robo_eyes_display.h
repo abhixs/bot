@@ -3,6 +3,7 @@
 // messages (Wi-Fi, activation code) and the song title.
 #pragma once
 
+#include "device_state.h"
 #include "dot_clock.h"
 #include "lvgl_display.h"
 #include "robo_eyes.h"
@@ -13,6 +14,24 @@
 #include <functional>
 #include <memory>
 #include <string>
+
+// Main display mode, chosen by the user and saved: what the screen shows in
+// standby and while talking.
+enum class MainDisplayMode { Time, Emotion };
+
+// Screen colors, saved. Light inverts the panel (lit background, dark drawing).
+enum class DisplayTheme { Dark, Light };
+
+// What is on the screen right now: the main mode's screen, unless a temporary one
+// takes over (it never changes the saved main mode).
+enum class DisplayScreen {
+    Eyes,        // main mode Emotion
+    Clock,       // main mode Time
+    Countdown,   // a timer / Pomodoro is running and the device is idle
+    Alarm,       // an alarm or timer is ringing
+    Expression,  // an expression the user asked for ("roo ke dikhao"), for a few seconds
+    Setup,       // starting, Wi-Fi setup, activation, upgrade, errors
+};
 
 class RoboEyesDisplay : public LvglDisplay {
 public:
@@ -45,8 +64,10 @@ public:
     // overriding automatic emotions and sleep. Returns false for unknown names.
     bool HoldExpression(const std::string& name, int seconds);
 
-    // Dot-matrix clock instead of the eyes until the user talks again.
-    void ShowClock();
+    void SetMainMode(MainDisplayMode mode);
+    MainDisplayMode main_mode() const { return main_mode_; }
+    void SetDisplayTheme(DisplayTheme theme);
+    DisplayTheme display_theme() const { return theme_; }
 
     // Everything the user says (speech-to-text), for local voice shortcuts.
     void OnUserSpeech(std::function<void(const std::string&)> cb) { on_user_speech_ = std::move(cb); }
@@ -91,10 +112,15 @@ private:
     // Keep a real emotion for a moment instead of flicking back to neutral.
     uint32_t last_emotion_ms_ = 0;
 
-    // Clock mode: on until the next conversation starts.
-    bool clock_mode_ = false;
-    bool clock_seen_idle_ = false;
-    bool dots_visible_ = false;
+    // Saved settings (NVS namespace "display")
+    MainDisplayMode main_mode_ = MainDisplayMode::Emotion;
+    DisplayTheme theme_ = DisplayTheme::Dark;
+    void LoadSettings();
+    void ApplyThemeLocked();
+
+    DisplayScreen screen_ = DisplayScreen::Eyes;
+    DisplayScreen ResolveScreen(DeviceState state, int countdown_s) const;
+    void ShowScreen(DisplayScreen screen);
 
     std::function<void(const std::string&)> on_user_speech_;
     std::function<int()> countdown_;

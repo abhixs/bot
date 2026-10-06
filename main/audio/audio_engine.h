@@ -35,6 +35,10 @@ public:
     virtual void EncodeWakeWordData() = 0;
     virtual bool GetWakeWordOpus(std::vector<uint8_t>& opus) = 0;
     virtual const std::string& GetLastDetectedWakeWord() const = 0;
+
+    // Wake word detection threshold (0.4 - 0.9999, lower is more sensitive); a value
+    // <= 0 restores the model default. Engines without support ignore it.
+    virtual void SetWakeWordThreshold(float threshold) { (void)threshold; }
 };
 
 #endif

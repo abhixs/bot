@@ -1,5 +1,6 @@
 #include "afe_audio_engine.h"
 
+#include <algorithm>
 #include <cassert>
 #include <cstring>
 #include <sstream>
@@ -174,6 +175,7 @@ bool AfeAudioEngine::Initialize(AudioCodec* codec, int frame_duration_ms,
         if (wakenet_models.size() > 1) {
             afe_config->wakenet_model_name_2 = wakenet_models[1];
         }
+        wakenet_count_ = std::min<int>(2, wakenet_models.size());
     }
     afe_config->agc_init = false;
     afe_config->memory_alloc_mode = AFE_MEMORY_ALLOC_MORE_PSRAM;
@@ -309,6 +311,12 @@ void AfeAudioEngine::EnableDeviceAec(bool enable) {
     UpdateAecState();
 }
 
+void AfeAudioEngine::SetWakeWordThreshold(float threshold) {
+    wakenet_threshold_.store(threshold);
+    wakenet_threshold_dirty_.store(true);
+    afe_control_dirty_ = true;
+}
+
 bool AfeAudioEngine::HasWakeWord() const { return wake_detector_ != WakeDetector::kNone; }
 
 bool AfeAudioEngine::IsWakeWordDetectionEnabled() const {
@@ -374,6 +382,17 @@ void AfeAudioEngine::UpdateAecState() {
 
 void AfeAudioEngine::ApplyAfeControls() {
     EventBits_t bits = xEventGroupGetBits(event_group_);
+    if (wake_detector_ == WakeDetector::kWakeNet && wakenet_threshold_dirty_.exchange(false)) {
+        const float threshold = wakenet_threshold_.load();
+        for (int index = 1; index <= wakenet_count_; ++index) {
+            if (threshold > 0.0f && afe_iface_->set_wakenet_threshold != nullptr) {
+                afe_iface_->set_wakenet_threshold(afe_data_, index, threshold);
+            } else if (threshold <= 0.0f && afe_iface_->reset_wakenet_threshold != nullptr) {
+                afe_iface_->reset_wakenet_threshold(afe_data_, index);
+            }
+        }
+        ESP_LOGI(TAG, "WakeNet threshold: %s", threshold > 0.0f ? "raised sensitivity" : "default");
+    }
     if (wake_detector_ == WakeDetector::kWakeNet) {
         if (bits & kWakeWordEnabled) {
             afe_iface_->enable_wakenet(afe_data_);

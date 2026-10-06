@@ -29,7 +29,6 @@ RoboEyes::RoboEyes(lv_obj_t* parent, int32_t width, int32_t height, lv_color_t o
     left_cx_ = eye_diameter_ / 2;
     right_cx_ = width_ - 1 - eye_diameter_ / 2;
     eye_cy_ = height_ / 2;
-    ring_width_ = eye_diameter_ >= 40 ? 2 : 1;
 
     obj_ = lv_obj_create(parent);
     lv_obj_remove_style_all(obj_);
@@ -110,7 +109,8 @@ RoboEyes::Mood RoboEyes::EffectiveMood() const {
         case Activity::Alarm:
             return Mood::Shocked;
         case Activity::Sleeping:
-            return Mood::Sleeping;
+            // Standby: big square "surprised" eyes that drift around and blink slowly.
+            return Mood::Surprised;
         case Activity::Setup:
         case Activity::Thinking:
             return Mood::Loading;
@@ -218,9 +218,10 @@ void RoboEyes::UpdateBehavior(uint32_t elapsed_ms) {
     const Mood mood = EffectiveMood();
 
     // Blink (not while asleep or loading).
+    const bool standby = activity_ == Activity::Sleeping;
     if (blink_elapsed_ms_ >= 0) {
         blink_elapsed_ms_ += static_cast<int32_t>(elapsed_ms);
-        if (blink_elapsed_ms_ > 160) {
+        if (blink_elapsed_ms_ > blink_duration_ms_) {
             blink_elapsed_ms_ = double_blink_ ? 0 : -1;
             double_blink_ = false;
         }
@@ -228,30 +229,46 @@ void RoboEyes::UpdateBehavior(uint32_t elapsed_ms) {
                mood != Mood::Speaking && mood != Mood::Confused && activity_ != Activity::Speaking) {
         // (no blinking on the cross symbols or while talking: it reads as jitter)
         blink_elapsed_ms_ = 0;
-        double_blink_ = (Random() % 5) == 0;
-        next_blink_ms_ = time_ms_ + 2200 + Random() % 3800;
+        if (standby) {
+            // Slow, relaxed blinks at a calm pace.
+            blink_duration_ms_ = 520;
+            double_blink_ = false;
+            next_blink_ms_ = time_ms_ + 4500 + Random() % 3000;
+        } else {
+            blink_duration_ms_ = 160;
+            double_blink_ = (Random() % 5) == 0;
+            next_blink_ms_ = time_ms_ + 2200 + Random() % 3800;
+        }
     }
 
     // Gaze: the pupils wander while idle and look at the user otherwise.
-    const bool wander = activity_ == Activity::Idle &&
-                        (mood == Mood::Focused || mood == Mood::Curious || mood == Mood::Surprised);
+    const bool wander = (activity_ == Activity::Idle &&
+                         (mood == Mood::Focused || mood == Mood::Curious ||
+                          mood == Mood::Surprised)) ||
+                        standby;
     if (wander) {
         if (time_ms_ >= next_gaze_ms_) {
-            if (Random() % 3 == 0) {
+            if (Random() % 4 == 0) {
                 gaze_target_x_ = 0;
                 gaze_target_y_ = 0;
+            } else if (standby) {
+                // Anywhere inside the visible circle (the drawing clamps to it).
+                gaze_target_x_ = RandomRange(-10.0f, 10.0f);
+                gaze_target_y_ = RandomRange(-8.0f, 8.0f);
             } else {
                 gaze_target_x_ = RandomRange(-7.0f, 7.0f);
                 gaze_target_y_ = RandomRange(-4.0f, 4.0f);
             }
-            next_gaze_ms_ = time_ms_ + 2500 + Random() % 3500;
+            next_gaze_ms_ = time_ms_ + (standby ? 3500 + Random() % 4000 : 2500 + Random() % 3500);
         }
     } else {
         gaze_target_x_ = 0;
         gaze_target_y_ = 0;
     }
-    gaze_x_ = Approach(gaze_x_, gaze_target_x_, elapsed_ms, 260.0f);
-    gaze_y_ = Approach(gaze_y_, gaze_target_y_, elapsed_ms, 260.0f);
+    // Standby drifts slowly and smoothly; awake eyes move quicker.
+    const float gaze_tau = standby ? 900.0f : 260.0f;
+    gaze_x_ = Approach(gaze_x_, gaze_target_x_, elapsed_ms, gaze_tau);
+    gaze_y_ = Approach(gaze_y_, gaze_target_y_, elapsed_ms, gaze_tau);
 
     // Speaking: random "syllables" make the symbols pulse with the voice.
     if (activity_ == Activity::Speaking) {
@@ -468,7 +485,7 @@ void RoboEyes::Draw(lv_layer_t* layer) {
     // Vertical squash from blink and expression swaps.
     float scale_y = 1.0f;
     if (blink_elapsed_ms_ >= 0) {
-        float phase = std::min(1.0f, blink_elapsed_ms_ / 160.0f);
+        float phase = std::min(1.0f, static_cast<float>(blink_elapsed_ms_) / blink_duration_ms_);
         scale_y = std::min(scale_y, 1.0f - 0.95f * std::sin(phase * kPi));
     }
     if (swap_elapsed_ms_ >= 0) {
@@ -510,7 +527,9 @@ void RoboEyes::Draw(lv_layer_t* layer) {
     }
 
     // Keep each symbol inside its socket.
-    const float inner = d / 2.0f - ring_width_ - 2.0f;
+    // The eye circles are not drawn: they only bound where the symbols may move
+    // (a small margin keeps them clear of the circle's edge).
+    const float inner = d / 2.0f - kEdgeMargin;
     auto place = [&](int32_t socket_cx, const EyeGlyph& g) {
         float half = std::max(g.w, g.glyph == Glyph::Arc ? g.w / 2 : g.h) * scale / 2.0f;
         float limit = std::max(0.0f, inner - half);

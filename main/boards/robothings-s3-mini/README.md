@@ -7,8 +7,8 @@ with a new board `robothings-s3-mini`.
 ## What is new
 
 - **Animated robot eyes** on the 128x64 OLED: blink, look around when idle, grow
-  attentive while listening, bounce while speaking, scan while connecting, fall asleep
-  (Zzz) after 2 minutes idle. Each AI emotion has its own face: happy, laughing, sad,
+  attentive while listening, pulse while speaking, scan while connecting, and drift
+  calmly in standby. Each AI emotion has its own face: happy, laughing, sad,
   crying, angry, surprised, love (heart eyes), thinking, confused, wink, cool.
 - **Voice alarms and timers** (device-side MCP tools `self.alarm.*`):
   set once / daily / weekdays / weekends / chosen days, list, cancel, snooze, optional
@@ -33,16 +33,44 @@ workflow manually (Actions -> Build RoboThings firmware -> Run workflow).
 
 ## Voice shortcuts and screen
 
-- **"Bye", "Bye bye", "Chup raho", "Chup raho ab", "So jao"**: the device stops at once
-  and goes to standby without answering (handled on the device).
-- **"Show clock" / "Clock dikhao"**: the eyes give way to a dot-matrix clock (hours in
-  the left eye, minutes in the right) until you talk again.
-- **"Time format 12 hours / 24 hours pe kar do"**: switches the clock format.
+Commands are recognised from their key words, so natural variations work.
+
+- **"Bye", "Bye bye", "Goodbye", "Chup raho"**: the device goes to standby at once
+  without a word: the speaker is muted the moment the words are recognised.
+- **"So jao"**: the same, showing the sleeping eyes for a few seconds.
+- **Main display mode** (saved, kept after a restart):
+  - **Time mode**: "show time", "show me the time", "screen par time dikhao", "clock
+    dikhao", "change the mode to time". The clock (`09 00`, always two-digit hours,
+    no colon) stays on screen, also while talking.
+  - **Emotion mode**: "show face", "show emotions", "emotions dikhao", "face dikhao",
+    "change the mode to emotions". The animated eyes and emotions.
+  - **"Change the mode" / "switch mode"** switches to the other one.
+  - Alarms, a running timer / Pomodoro (while idle) and setup screens take over the
+    screen for a while and then hand it back to the chosen mode.
+- **Theme** (saved): "light mode", "invert the screen", "make screen white", "screen ko
+  light mode pe kardo" invert the panel; "dark mode", "turn off light mode", "screen
+  dark karo" return to the default dark screen.
+- **"Time format 12 hours / 24 hours pe kar do"**: switches the clock format (saved).
 - **"Pomodoro timer lagao" / "10 minute ka timer"**: while a timer runs and the device
-  is idle, the screen counts down minutes | seconds in the same dot font.
+  is idle, the screen counts down minutes : seconds in the same dot font.
 - **"Roo ke dikhao", "Gussa dikhao", "Dil wali aankhein dikhao"...**: shows that
   expression (crying, angry, in love, ...) for a few seconds.
-- Standby shows the sleeping eyes.
+- Standby (emotion mode) shows big square eyes drifting slowly inside invisible eye
+  circles, with slow, relaxed blinks.
+
+## Microphone, echo cancellation and alarms
+
+- **Words said right after "Alexa" are kept**: the microphone keeps recording while the
+  connection opens and that speech is sent first, so "Alexa, roo ke dikhao" in one
+  breath reaches the server complete.
+- **Echo cancellation**: the MAX98357A cannot feed its output back, so the firmware
+  keeps a copy of what it plays (software playback reference) and the ESP-SR AFE
+  removes the device's own sound from the microphone while it listens for the wake
+  word. "Alexa" can then be heard over the alarm beep, music or the assistant's voice.
+- **Alarms / timers**: the beep (about 1 s) repeats every 3 s and the wake word is more
+  sensitive while it rings. Say "Alexa" (or press any button) to stop it.
+- A clipping microphone (too loud / too close) is reported in the serial log.
+- Speech-to-text itself runs on the server.
 
 ## Change the wake word by voice
 

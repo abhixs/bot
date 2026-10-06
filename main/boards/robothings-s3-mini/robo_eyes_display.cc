@@ -4,6 +4,7 @@
 #include "assets/lang_config.h"
 #include "lvgl_font.h"
 #include "lvgl_theme.h"
+#include "settings.h"
 
 #include <esp_err.h>
 #include <esp_log.h>
@@ -29,6 +30,16 @@ const lv_color_t kPixelOn = lv_color_black();
 const lv_color_t kPixelOff = lv_color_white();
 constexpr int kStatusBarHeight = 16;
 constexpr uint32_t kFrameMs = 40;  // 25 fps is plenty over 400 kHz I2C
+
+constexpr const char* kSettingsNamespace = "display";
+constexpr const char* kMainModeKey = "main_mode";  // "time" / "emotion"
+constexpr const char* kThemeKey = "theme";         // "dark" / "light" (shared with Display)
+
+bool IsSetupState(DeviceState state) {
+    return state == kDeviceStateStarting || state == kDeviceStateWifiConfiguring ||
+           state == kDeviceStateActivating || state == kDeviceStateUpgrading ||
+           state == kDeviceStateAudioTesting || state == kDeviceStateFatalError;
+}
 }  // namespace
 
 RoboEyesDisplay::RoboEyesDisplay(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_handle_t panel,
@@ -49,6 +60,15 @@ RoboEyesDisplay::RoboEyesDisplay(esp_lcd_panel_io_handle_t panel_io, esp_lcd_pan
     dark_theme->set_emoji_font(emoji_font);
     LvglThemeManager::GetInstance().RegisterTheme("dark", dark_theme);
     current_theme_ = dark_theme;
+
+    // Same fonts; "light" inverts the panel (see ApplyThemeLocked). Registering it
+    // lets the common "self.screen.set_theme" tool switch light / dark too.
+    auto light_theme = new LvglTheme("light");
+    light_theme->set_text_font(text_font);
+    light_theme->set_icon_font(icon_font);
+    light_theme->set_large_icon_font(large_icon_font);
+    light_theme->set_emoji_font(emoji_font);
+    LvglThemeManager::GetInstance().RegisterTheme("light", light_theme);
 
     ESP_LOGI(TAG, "Initialize LVGL");
     lvgl_port_cfg_t port_cfg = ESP_LVGL_PORT_INIT_CONFIG();
@@ -196,6 +216,88 @@ void RoboEyesDisplay::SetupUI() {
     lv_obj_add_flag(dot_clock_->obj(), LV_OBJ_FLAG_HIDDEN);
 
     animation_timer_ = lv_timer_create(AnimationTimerCb, kFrameMs, this);
+
+    LoadSettings();
+    ApplyThemeLocked();
+}
+
+// Restores the saved main mode and theme (called once, at start-up).
+void RoboEyesDisplay::LoadSettings() {
+    Settings settings(kSettingsNamespace, false);
+    main_mode_ = settings.GetString(kMainModeKey, "emotion") == "time" ? MainDisplayMode::Time
+                                                                      : MainDisplayMode::Emotion;
+    theme_ = settings.GetString(kThemeKey, "dark") == "light" ? DisplayTheme::Light
+                                                             : DisplayTheme::Dark;
+    ESP_LOGI(TAG, "Main mode: %s, theme: %s", main_mode_ == MainDisplayMode::Time ? "time" : "emotion",
+             theme_ == DisplayTheme::Light ? "light" : "dark");
+}
+
+// Called with the display lock held.
+void RoboEyesDisplay::ApplyThemeLocked() {
+    const bool light = theme_ == DisplayTheme::Light;
+    if (panel_ != nullptr) {
+        // The controller's own "inverse display" mode: no pixel is redrawn.
+        esp_err_t err = esp_lcd_panel_invert_color(panel_, light);
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "Failed to set the %s theme: %s", light ? "light" : "dark",
+                     esp_err_to_name(err));
+        }
+    }
+    if (auto theme = LvglThemeManager::GetInstance().GetTheme(light ? "light" : "dark")) {
+        current_theme_ = theme;
+    }
+}
+
+void RoboEyesDisplay::SetMainMode(MainDisplayMode mode) {
+    {
+        DisplayLockGuard lock(this);
+        main_mode_ = mode;
+        hold_active_ = false;  // show the chosen mode right away
+        idle_ms_ = 0;
+    }
+    Settings settings(kSettingsNamespace, true);
+    settings.SetString(kMainModeKey, mode == MainDisplayMode::Time ? "time" : "emotion");
+    ESP_LOGI(TAG, "Main mode set to %s", mode == MainDisplayMode::Time ? "time" : "emotion");
+}
+
+void RoboEyesDisplay::SetDisplayTheme(DisplayTheme theme) {
+    {
+        DisplayLockGuard lock(this);
+        theme_ = theme;
+        ApplyThemeLocked();
+    }
+    Settings settings(kSettingsNamespace, true);
+    settings.SetString(kThemeKey, theme == DisplayTheme::Light ? "light" : "dark");
+    ESP_LOGI(TAG, "Theme set to %s", theme == DisplayTheme::Light ? "light" : "dark");
+}
+
+// Priority: setup screens, a ringing alarm, a requested expression, a running
+// timer (while idle), then the main mode.
+DisplayScreen RoboEyesDisplay::ResolveScreen(DeviceState state, int countdown_s) const {
+    if (IsSetupState(state)) return DisplayScreen::Setup;
+    if (alarm_active_) return DisplayScreen::Alarm;
+    if (hold_active_) return DisplayScreen::Expression;
+    if (countdown_s >= 0 && state == kDeviceStateIdle) return DisplayScreen::Countdown;
+    return main_mode_ == MainDisplayMode::Time ? DisplayScreen::Clock : DisplayScreen::Eyes;
+}
+
+// Swaps between the eyes and the dot-matrix face (clock / countdown).
+void RoboEyesDisplay::ShowScreen(DisplayScreen screen) {
+    if (screen == screen_ || eyes_ == nullptr || dot_clock_ == nullptr) {
+        screen_ = screen;
+        return;
+    }
+    const bool dots = screen == DisplayScreen::Clock || screen == DisplayScreen::Countdown;
+    const bool had_dots = screen_ == DisplayScreen::Clock || screen_ == DisplayScreen::Countdown;
+    screen_ = screen;
+    if (dots == had_dots) return;
+    if (dots) {
+        lv_obj_remove_flag(dot_clock_->obj(), LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(eyes_->obj(), LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_add_flag(dot_clock_->obj(), LV_OBJ_FLAG_HIDDEN);
+        lv_obj_remove_flag(eyes_->obj(), LV_OBJ_FLAG_HIDDEN);
+    }
 }
 
 void RoboEyesDisplay::AnimationTimerCb(lv_timer_t* timer) {
@@ -208,7 +310,7 @@ void RoboEyesDisplay::Animate(uint32_t elapsed_ms) {
     if (eyes_ == nullptr) {
         return;
     }
-    DeviceState state = Application::GetInstance().GetDeviceState();
+    const DeviceState state = Application::GetInstance().GetDeviceState();
     if (static_cast<int>(state) != last_state_) {
         last_state_ = static_cast<int>(state);
         idle_ms_ = 0;
@@ -216,58 +318,20 @@ void RoboEyesDisplay::Animate(uint32_t elapsed_ms) {
     const uint32_t now = lv_tick_get();
     if (hold_active_ && static_cast<int32_t>(hold_until_ms_ - now) <= 0) {
         hold_active_ = false;
-    }
-    if (hold_active_) {
-        eyes_->SetMood(hold_mood_);
-        idle_ms_ = 0;  // a requested expression is not replaced by sleep
+        eyes_->SetMood(RoboEyes::Mood::Focused);  // back to the normal eyes
     }
 
-    // Clock mode ends when a new conversation starts (wake word / button).
-    if (clock_mode_) {
-        if (state == kDeviceStateIdle) {
-            clock_seen_idle_ = true;
-        } else if (clock_seen_idle_) {
-            clock_mode_ = false;
-        }
-    }
     const int countdown_s = countdown_ ? countdown_() : -1;
-    const bool show_countdown = countdown_s >= 0 && state == kDeviceStateIdle;
-    const bool show_dots = !alarm_active_ && (show_countdown || clock_mode_);
-    if (show_dots) {
-        UpdateDotFace(!show_countdown, countdown_s);
-        idle_ms_ = 0;
-    }
-    if (show_dots != dots_visible_ && dot_clock_ != nullptr) {
-        dots_visible_ = show_dots;
-        if (show_dots) {
-            lv_obj_remove_flag(dot_clock_->obj(), LV_OBJ_FLAG_HIDDEN);
-            lv_obj_add_flag(eyes_->obj(), LV_OBJ_FLAG_HIDDEN);
-        } else {
-            lv_obj_add_flag(dot_clock_->obj(), LV_OBJ_FLAG_HIDDEN);
-            lv_obj_remove_flag(eyes_->obj(), LV_OBJ_FLAG_HIDDEN);
-        }
-    }
-    if (state == kDeviceStateIdle && !alarm_active_ && !music_active_) {
-        idle_ms_ = std::min<uint32_t>(idle_ms_ + elapsed_ms, kSleepAfterMs);
-    } else {
-        idle_ms_ = 0;
-    }
-
-    RoboEyes::Activity activity = RoboEyes::Activity::Idle;
-    const bool music_showing = music_active_ && state == kDeviceStateIdle && !alarm_active_;
+    const DisplayScreen screen = ResolveScreen(state, countdown_s);
+    ShowScreen(screen);
 
     // Text strip: only when there is something to read.
     if (status_bar_ != nullptr) {
-        const bool setup_state = state == kDeviceStateStarting ||
-                                 state == kDeviceStateWifiConfiguring ||
-                                 state == kDeviceStateActivating ||
-                                 state == kDeviceStateUpgrading ||
-                                 state == kDeviceStateAudioTesting ||
-                                 state == kDeviceStateFatalError;
         const bool notifying = notification_label_ != nullptr &&
                                !lv_obj_has_flag(notification_label_, LV_OBJ_FLAG_HIDDEN);
-        const bool timed = static_cast<int32_t>(overlay_until_ms_ - lv_tick_get()) > 0;
-        const bool visible = alarm_active_ || setup_state || notifying || timed;
+        const bool timed = static_cast<int32_t>(overlay_until_ms_ - now) > 0;
+        const bool visible =
+            screen == DisplayScreen::Alarm || screen == DisplayScreen::Setup || notifying || timed;
         if (visible != !lv_obj_has_flag(status_bar_, LV_OBJ_FLAG_HIDDEN)) {
             if (visible) {
                 lv_obj_remove_flag(status_bar_, LV_OBJ_FLAG_HIDDEN);
@@ -277,39 +341,49 @@ void RoboEyesDisplay::Animate(uint32_t elapsed_ms) {
         }
     }
 
-    if (alarm_active_) {
-        activity = RoboEyes::Activity::Alarm;
-    } else if (music_showing) {
-        activity = RoboEyes::Activity::Music;
-    } else if (power_save_ || idle_ms_ >= kSleepAfterMs) {
-        activity = RoboEyes::Activity::Sleeping;
+    if (screen == DisplayScreen::Clock || screen == DisplayScreen::Countdown) {
+        UpdateDotFace(screen == DisplayScreen::Clock, countdown_s);
+        idle_ms_ = 0;
+        return;  // the eyes are hidden: no need to animate them
+    }
+
+    // Eyes: standby (idle for a moment) shows the relaxed standby eyes.
+    const bool music_showing = music_active_ && state == kDeviceStateIdle;
+    if (screen == DisplayScreen::Eyes && state == kDeviceStateIdle && !music_active_) {
+        idle_ms_ = std::min<uint32_t>(idle_ms_ + elapsed_ms, kSleepAfterMs);
     } else {
-        switch (state) {
-            case kDeviceStateListening:
+        idle_ms_ = 0;
+    }
+
+    RoboEyes::Activity activity = RoboEyes::Activity::Idle;
+    switch (screen) {
+        case DisplayScreen::Alarm:
+            activity = RoboEyes::Activity::Alarm;
+            break;
+        case DisplayScreen::Setup:
+            activity = RoboEyes::Activity::Setup;
+            break;
+        case DisplayScreen::Expression:
+            eyes_->SetMood(hold_mood_);
+            activity = state == kDeviceStateSpeaking ? RoboEyes::Activity::Speaking
+                                                     : RoboEyes::Activity::Idle;
+            break;
+        default:
+            if (music_showing) {
+                activity = RoboEyes::Activity::Music;
+            } else if (power_save_ || idle_ms_ >= kSleepAfterMs) {
+                activity = RoboEyes::Activity::Sleeping;  // standby eyes
+            } else if (state == kDeviceStateListening) {
                 activity = RoboEyes::Activity::Listening;
-                break;
-            case kDeviceStateSpeaking:
+            } else if (state == kDeviceStateSpeaking) {
                 activity = RoboEyes::Activity::Speaking;
-                break;
-            case kDeviceStateConnecting:
+            } else if (state == kDeviceStateConnecting) {
                 activity = RoboEyes::Activity::Thinking;
-                break;
-            case kDeviceStateStarting:
-            case kDeviceStateWifiConfiguring:
-            case kDeviceStateActivating:
-            case kDeviceStateUpgrading:
-            case kDeviceStateAudioTesting:
-                activity = RoboEyes::Activity::Setup;
-                break;
-            default:
-                activity = RoboEyes::Activity::Idle;
-                break;
-        }
+            }
+            break;
     }
     eyes_->SetActivity(activity);
-    if (!dots_visible_) {
-        eyes_->Tick(elapsed_ms);
-    }
+    eyes_->Tick(elapsed_ms);
 }
 
 void RoboEyesDisplay::UpdateDotFace(bool show_clock, int countdown_s) {
@@ -319,8 +393,8 @@ void RoboEyesDisplay::UpdateDotFace(bool show_clock, int countdown_s) {
         snprintf(buf, sizeof(buf), "%02d", v % 100);
         return std::string(buf);
     };
-    const bool blink_on = (lv_tick_get() / 500) % 2 == 0;
     if (!show_clock) {
+        const bool blink_on = (lv_tick_get() / 500) % 2 == 0;
         // Timer / Pomodoro: minutes | seconds (hours | minutes from 100 min up).
         int minutes = countdown_s / 60;
         if (minutes >= 100) {
@@ -338,14 +412,9 @@ void RoboEyesDisplay::UpdateDotFace(bool show_clock, int countdown_s) {
     struct tm local;
     gmtime_r(&t, &local);  // the clock already holds local wall time
     const bool use_24h = use_24h_ ? use_24h_() : false;
-    std::string hours;
-    if (use_24h) {
-        hours = two(local.tm_hour);
-    } else {
-        int h12 = local.tm_hour % 12 == 0 ? 12 : local.tm_hour % 12;
-        hours = std::to_string(h12);
-    }
-    dot_clock_->Set(hours, two(local.tm_min), blink_on);
+    // Time mode: always two-digit hours ("09 00", "12 30") and no colon.
+    const int hour = use_24h ? local.tm_hour : (local.tm_hour % 12 == 0 ? 12 : local.tm_hour % 12);
+    dot_clock_->Set(two(hour), two(local.tm_min), false);
 }
 
 bool RoboEyesDisplay::HoldExpression(const std::string& name, int seconds) {
@@ -357,17 +426,9 @@ bool RoboEyesDisplay::HoldExpression(const std::string& name, int seconds) {
     hold_mood_ = mood;
     hold_active_ = true;
     hold_until_ms_ = lv_tick_get() + static_cast<uint32_t>(std::max(1, seconds)) * 1000;
-    clock_mode_ = false;
     idle_ms_ = 0;
     if (eyes_ != nullptr) eyes_->SetMood(mood);
     return true;
-}
-
-void RoboEyesDisplay::ShowClock() {
-    DisplayLockGuard lock(this);
-    clock_mode_ = true;
-    clock_seen_idle_ = Application::GetInstance().GetDeviceState() == kDeviceStateIdle;
-    hold_active_ = false;
 }
 
 void RoboEyesDisplay::SetStatus(const char* status) {
@@ -383,10 +444,6 @@ void RoboEyesDisplay::SetStatus(const char* status) {
 void RoboEyesDisplay::SetChatMessage(const char* role, const char* content) {
     if (role != nullptr && strcmp(role, "user") == 0) {
         if (content == nullptr || content[0] == '\0') return;
-        {
-            DisplayLockGuard lock(this);
-            clock_mode_ = false;  // talking again brings the eyes back
-        }
         if (on_user_speech_) on_user_speech_(content);
         return;
     }
@@ -433,10 +490,15 @@ void RoboEyesDisplay::SetEmotion(const char* emotion) {
     }
 }
 
+// Reached from the common "self.screen.set_theme" tool ("light" / "dark").
 void RoboEyesDisplay::SetTheme(Theme* theme) {
-    DisplayLockGuard lock(this);
-    auto lvgl_theme = static_cast<LvglTheme*>(theme);
-    lv_obj_set_style_text_font(lv_screen_active(), lvgl_theme->text_font()->font(), 0);
+    if (theme == nullptr) return;
+    {
+        DisplayLockGuard lock(this);
+        auto lvgl_theme = static_cast<LvglTheme*>(theme);
+        lv_obj_set_style_text_font(lv_screen_active(), lvgl_theme->text_font()->font(), 0);
+    }
+    SetDisplayTheme(theme->name() == "light" ? DisplayTheme::Light : DisplayTheme::Dark);
 }
 
 void RoboEyesDisplay::SetPowerSaveMode(bool on) {

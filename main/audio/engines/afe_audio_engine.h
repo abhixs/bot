@@ -45,6 +45,7 @@ public:
     void EncodeWakeWordData() override;
     bool GetWakeWordOpus(std::vector<uint8_t>& opus) override;
     const std::string& GetLastDetectedWakeWord() const override { return last_detected_wake_word_; }
+    void SetWakeWordThreshold(float threshold) override;
 
 private:
     enum class WakeDetector {
@@ -80,6 +81,10 @@ private:
     // uses it to reject a fetch result produced before a disable/re-enable cycle.
     std::atomic<uint32_t> control_generation_{0};
     WakeDetector wake_detector_ = WakeDetector::kNone;
+    int wakenet_count_ = 0;
+    // Requested WakeNet threshold (<= 0: model default), applied by ProcessingTask.
+    std::atomic<float> wakenet_threshold_{0.0f};
+    std::atomic<bool> wakenet_threshold_dirty_{false};
 
     std::unique_ptr<CustomWakeWord> custom_wake_word_;
     std::vector<std::string> wake_words_;

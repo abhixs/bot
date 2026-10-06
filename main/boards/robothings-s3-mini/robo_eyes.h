@@ -4,12 +4,14 @@
 // angry, surprised, wink, blush, loading, curious, tease, confused, in love,
 // shocked, annoyed, focused, happy-closed and sweet.
 //
-// Layout: both sockets touch the left and right screen edges with a 5 mm gap
-// between them (22 px on a 1.3" 128x64 panel, 0.23 mm per pixel), which makes
-// each socket 53 px (about 12.2 mm) wide.
+// Layout: two invisible eye circles ("sockets") touch the left and right screen
+// edges with a 5 mm gap between them (22 px on a 1.3" 128x64 panel, 0.23 mm per
+// pixel), which makes each 53 px (about 12.2 mm) wide. The circles are never drawn;
+// they only bound where the symbols may move.
 //
-// The symbols move inside the sockets (looking around), blink, squash into each
-// other when the expression changes, pulse with speech and dance with music.
+// The symbols move inside the circles (looking around), blink, squash into each
+// other when the expression changes, pulse with speech and dance with music. In
+// standby the big square eyes drift slowly and blink in a relaxed way.
 #pragma once
 
 #include <lvgl.h>
@@ -112,7 +114,7 @@ private:
     // Socket geometry
     int32_t eye_diameter_ = 53;
     int32_t left_cx_ = 26, right_cx_ = 101, eye_cy_ = 32;
-    int32_t ring_width_ = 2;
+    static constexpr float kEdgeMargin = 4.0f;  // px kept free inside each circle
 
     Mood mood_ = Mood::Focused;
     Activity activity_ = Activity::Idle;
@@ -128,6 +130,7 @@ private:
     // Blink
     uint32_t next_blink_ms_ = 2500;
     int32_t blink_elapsed_ms_ = -1;
+    int32_t blink_duration_ms_ = 160;
     bool double_blink_ = false;
 
     // Gaze (symbols move inside the sockets)
