@@ -252,12 +252,24 @@ void RoboEyesDisplay::SetMainMode(MainDisplayMode mode) {
     {
         DisplayLockGuard lock(this);
         main_mode_ = mode;
+        countdown_selected_ = false;
         hold_active_ = false;  // show the chosen mode right away
         idle_ms_ = 0;
     }
     Settings settings(kSettingsNamespace, true);
     settings.SetString(kMainModeKey, mode == MainDisplayMode::Time ? "time" : "emotion");
     ESP_LOGI(TAG, "Main mode set to %s", mode == MainDisplayMode::Time ? "time" : "emotion");
+}
+
+bool RoboEyesDisplay::ShowCountdown() {
+    if (!countdown_ || countdown_() < 0) {
+        return false;  // no timer running
+    }
+    DisplayLockGuard lock(this);
+    countdown_selected_ = true;
+    hold_active_ = false;
+    ESP_LOGI(TAG, "Showing the countdown");
+    return true;
 }
 
 void RoboEyesDisplay::SetDisplayTheme(DisplayTheme theme) {
@@ -271,13 +283,14 @@ void RoboEyesDisplay::SetDisplayTheme(DisplayTheme theme) {
     ESP_LOGI(TAG, "Theme set to %s", theme == DisplayTheme::Light ? "light" : "dark");
 }
 
-// Priority: setup screens, a ringing alarm, a requested expression, a running
-// timer (while idle), then the main mode.
+// Priority: setup screens, a ringing alarm, a requested expression, the countdown
+// (when chosen, while a timer runs), then the main mode. Only the user (or a new
+// short timer) changes which one is chosen.
 DisplayScreen RoboEyesDisplay::ResolveScreen(DeviceState state, int countdown_s) const {
     if (IsSetupState(state)) return DisplayScreen::Setup;
     if (alarm_active_) return DisplayScreen::Alarm;
     if (hold_active_) return DisplayScreen::Expression;
-    if (countdown_s >= 0 && state == kDeviceStateIdle) return DisplayScreen::Countdown;
+    if (countdown_selected_ && countdown_s >= 0) return DisplayScreen::Countdown;
     return main_mode_ == MainDisplayMode::Time ? DisplayScreen::Clock : DisplayScreen::Eyes;
 }
 
@@ -311,34 +324,28 @@ void RoboEyesDisplay::Animate(uint32_t elapsed_ms) {
         return;
     }
     const DeviceState state = Application::GetInstance().GetDeviceState();
+    const uint32_t now = lv_tick_get();
     if (static_cast<int>(state) != last_state_) {
         last_state_ = static_cast<int>(state);
+        state_since_ms_ = now;
         idle_ms_ = 0;
     }
-    const uint32_t now = lv_tick_get();
     if (hold_active_ && static_cast<int32_t>(hold_until_ms_ - now) <= 0) {
         hold_active_ = false;
         eyes_->SetMood(RoboEyes::Mood::Focused);  // back to the normal eyes
     }
 
     const int countdown_s = countdown_ ? countdown_() : -1;
+    if (countdown_s < 0) {
+        countdown_selected_ = false;  // no timer left: back to the main mode for good
+    }
     const DisplayScreen screen = ResolveScreen(state, countdown_s);
     ShowScreen(screen);
 
-    // Text strip: only when there is something to read.
-    if (status_bar_ != nullptr) {
-        const bool notifying = notification_label_ != nullptr &&
-                               !lv_obj_has_flag(notification_label_, LV_OBJ_FLAG_HIDDEN);
-        const bool timed = static_cast<int32_t>(overlay_until_ms_ - now) > 0;
-        const bool visible =
-            screen == DisplayScreen::Alarm || screen == DisplayScreen::Setup || notifying || timed;
-        if (visible != !lv_obj_has_flag(status_bar_, LV_OBJ_FLAG_HIDDEN)) {
-            if (visible) {
-                lv_obj_remove_flag(status_bar_, LV_OBJ_FLAG_HIDDEN);
-            } else {
-                lv_obj_add_flag(status_bar_, LV_OBJ_FLAG_HIDDEN);
-            }
-        }
+    // No text on the screen, ever: the status strip stays hidden (only the clock and
+    // countdown digits are shown).
+    if (status_bar_ != nullptr && !lv_obj_has_flag(status_bar_, LV_OBJ_FLAG_HIDDEN)) {
+        lv_obj_add_flag(status_bar_, LV_OBJ_FLAG_HIDDEN);
     }
 
     if (screen == DisplayScreen::Clock || screen == DisplayScreen::Countdown) {
@@ -364,21 +371,26 @@ void RoboEyesDisplay::Animate(uint32_t elapsed_ms) {
             activity = RoboEyes::Activity::Setup;
             break;
         case DisplayScreen::Expression:
+            // The requested face stays, also while the reply is spoken.
             eyes_->SetMood(hold_mood_);
-            activity = state == kDeviceStateSpeaking ? RoboEyes::Activity::Speaking
-                                                     : RoboEyes::Activity::Idle;
+            activity = RoboEyes::Activity::Idle;
             break;
         default:
             if (music_showing) {
                 activity = RoboEyes::Activity::Music;
             } else if (power_save_ || idle_ms_ >= kSleepAfterMs) {
                 activity = RoboEyes::Activity::Sleeping;  // standby eyes
+            } else if (state == kDeviceStateConnecting) {
+                // Wake word heard (the connection opens): ready for the command.
+                activity = RoboEyes::Activity::WakeHeard;
             } else if (state == kDeviceStateListening) {
-                activity = RoboEyes::Activity::Listening;
+                // A listening turn opens with the "ready" face, then shows that it
+                // is listening. Waiting for the reply keeps the listening face: there
+                // is no separate thinking face.
+                activity = now - state_since_ms_ < kWakeFaceMs ? RoboEyes::Activity::WakeHeard
+                                                                : RoboEyes::Activity::Listening;
             } else if (state == kDeviceStateSpeaking) {
                 activity = RoboEyes::Activity::Speaking;
-            } else if (state == kDeviceStateConnecting) {
-                activity = RoboEyes::Activity::Thinking;
             }
             break;
     }

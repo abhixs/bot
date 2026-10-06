@@ -90,6 +90,8 @@ private:
 
     // WakeNet threshold while an alarm rings (0.4 - 0.9999, lower = more sensitive).
     static constexpr float kRingingWakeThreshold = 0.45f;
+    // Timers shorter than this switch the screen to their countdown when set.
+    static constexpr int kAutoCountdownSeconds = 31 * 60;
 
     // Ends the conversation right away, without the assistant saying anything: the
     // speaker is muted at once (whatever reply is already on its way is not heard)
@@ -146,6 +148,10 @@ private:
     void HandleUserSpeech(const std::string& text) {
         const VoiceShortcut shortcut = ParseVoiceShortcut(text);
         if (shortcut == VoiceShortcut::None) return;
+        if (shortcut == VoiceShortcut::TimerMode &&
+            (eyes_display_ == nullptr || AlarmManager::GetInstance().SecondsToNextTimer() < 0)) {
+            return;  // no timer running: let the AI answer
+        }
         ESP_LOGI(TAG, "Voice shortcut: %s (%s)", VoiceShortcutName(shortcut), text.c_str());
         // Every shortcut ends the conversation silently: the command is done here.
         GoStandby();
@@ -164,6 +170,9 @@ private:
                 eyes_display_->SetMainMode(eyes_display_->main_mode() == MainDisplayMode::Time
                                                ? MainDisplayMode::Emotion
                                                : MainDisplayMode::Time);
+                break;
+            case VoiceShortcut::TimerMode:
+                eyes_display_->ShowCountdown();
                 break;
             case VoiceShortcut::LightTheme:
                 eyes_display_->SetDisplayTheme(DisplayTheme::Light);
@@ -339,6 +348,12 @@ private:
                 eyes_display_->ClearAlarmBanner();
             }
         });
+        alarms.OnTimerSet([this](int seconds) {
+            // A short timer (under 31 minutes, e.g. a Pomodoro) shows its countdown at once.
+            if (eyes_display_ != nullptr && seconds < kAutoCountdownSeconds) {
+                eyes_display_->ShowCountdown();
+            }
+        });
         alarms.Initialize();
 
         if (eyes_display_ != nullptr) {
@@ -372,11 +387,12 @@ private:
             });
         mcp.AddTool(
             "self.screen.set_mode",
-            "Choose the screen's main mode (saved, also kept after a restart): 'time' shows a "
-            "big clock all the time, also while talking; 'emotion' shows the animated eyes and "
-            "emotions; 'toggle' switches to the other one. Use when the user asks to show the "
-            "time / clock or the face / emotions on the screen, or to change the mode. (For the "
-            "light / dark screen use self.screen.set_theme.)",
+            "Choose what the screen shows. Main modes (saved, kept after a restart): 'time' = "
+            "big clock, also while talking; 'emotion' = animated eyes; 'toggle' = the other "
+            "main mode. 'timer' = the countdown of the shortest running timer (until another "
+            "mode is chosen). Use when the user asks to show the time / clock, the face / "
+            "emotions, the timer / countdown, or to change the mode. (Light / dark screen: "
+            "self.screen.set_theme.)",
             PropertyList({Property("mode", kPropertyTypeString).SetMaxLength(10)}),
             [this](const PropertyList& properties) -> ToolResult {
                 if (eyes_display_ == nullptr) return std::unexpected(std::string("No display"));
@@ -388,12 +404,18 @@ private:
                     target = MainDisplayMode::Time;
                 } else if (mode == "emotion" || mode == "emotions" || mode == "face") {
                     target = MainDisplayMode::Emotion;
+                } else if (mode == "timer" || mode == "countdown") {
+                    if (!eyes_display_->ShowCountdown()) {
+                        return std::unexpected(std::string("No timer is running."));
+                    }
+                    return std::string("{\"mode\":\"timer\"}");
                 } else if (mode == "toggle") {
                     target = eyes_display_->main_mode() == MainDisplayMode::Time
                                  ? MainDisplayMode::Emotion
                                  : MainDisplayMode::Time;
                 } else {
-                    return std::unexpected(std::string("mode must be time, emotion or toggle"));
+                    return std::unexpected(
+                        std::string("mode must be time, emotion, timer or toggle"));
                 }
                 eyes_display_->SetMainMode(target);
                 return std::string(target == MainDisplayMode::Time ? "{\"mode\":\"time\"}"

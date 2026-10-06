@@ -27,7 +27,7 @@ enum class DisplayTheme { Dark, Light };
 enum class DisplayScreen {
     Eyes,        // main mode Emotion
     Clock,       // main mode Time
-    Countdown,   // a timer / Pomodoro is running and the device is idle
+    Countdown,   // the shortest running timer / Pomodoro, when chosen
     Alarm,       // an alarm or timer is ringing
     Expression,  // an expression the user asked for ("roo ke dikhao"), for a few seconds
     Setup,       // starting, Wi-Fi setup, activation, upgrade, errors
@@ -66,6 +66,11 @@ public:
 
     void SetMainMode(MainDisplayMode mode);
     MainDisplayMode main_mode() const { return main_mode_; }
+    // Shows the countdown of the shortest running timer (also while talking) until
+    // the user picks the time or emotion mode, or no timer is left. Not saved.
+    // Returns false when no timer runs.
+    bool ShowCountdown();
+    bool countdown_selected() const { return countdown_selected_; }
     void SetDisplayTheme(DisplayTheme theme);
     DisplayTheme display_theme() const { return theme_; }
 
@@ -118,7 +123,11 @@ private:
     void LoadSettings();
     void ApplyThemeLocked();
 
+    bool countdown_selected_ = false;
     DisplayScreen screen_ = DisplayScreen::Eyes;
+    uint32_t state_since_ms_ = 0;  // when the device state last changed (lv_tick)
+    // How long a listening turn first shows the "ready" (Sweet) face.
+    static constexpr uint32_t kWakeFaceMs = 900;
     DisplayScreen ResolveScreen(DeviceState state, int countdown_s) const;
     void ShowScreen(DisplayScreen screen);
 

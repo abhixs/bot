@@ -52,6 +52,16 @@ constexpr Words kShowWords = {"show", "display", "dikhao", "dikha", "dikhado", "
                               "दिखा", "दिखाइए", "दिखादो", "स्क्रीन", "मोड"};
 constexpr Words kChangeWords = {"change", "switch", "toggle", "swap", "badlo", "badal", "badle",
                                 "चेंज", "बदलो", "बदल"};
+// Showing the running timer ("show timer", "countdown dikhao")
+constexpr Words kTimerWords = {"timer", "timers", "countdown", "pomodoro", "टाइमर", "काउंटडाउन",
+                               "पोमोडोरो"};
+// ...but setting, cancelling or asking about one is for the AI.
+constexpr Words kTimerActionWords = {"set", "start", "laga", "lagao", "lagado", "minute",
+                                     "minutes", "min", "second", "seconds", "hour", "hours",
+                                     "cancel", "stop", "band", "delete", "hatao", "remove",
+                                     "kitna", "kitne", "how", "much", "left", "baki", "bacha",
+                                     "मिनट", "लगाओ", "बंद", "कितना"};
+
 // Alarm / timer / format requests also mention "time" or "clock": the AI handles them.
 constexpr Words kNotModeWords = {"timer", "timers", "alarm", "alarms", "pomodoro", "minute",
                                  "minutes", "min", "second", "seconds", "hour", "hours", "ghante",
@@ -146,7 +156,19 @@ VoiceShortcut ParseTheme(const Sentence& s) {
     return VoiceShortcut::None;
 }
 
+bool HasDigit(const std::string& text) {
+    return std::any_of(text.begin(), text.end(), [](unsigned char c) { return isdigit(c); });
+}
+
 VoiceShortcut ParseMode(const Sentence& s) {
+    if (s.Has(kTimerWords)) {
+        const bool show = s.Has(kShowWords) || s.Has(kChangeWords);
+        if (show && !s.Has(kTimerActionWords) && !s.Has(kQuestionWords) && !HasDigit(s.text()) &&
+            !s.Has(kTimeWords) && !s.Has(kEmotionWords)) {
+            return VoiceShortcut::TimerMode;
+        }
+        return VoiceShortcut::None;
+    }
     if (s.Has(kNotModeWords) || s.Has(kQuestionWords)) return VoiceShortcut::None;
     const bool time = s.Has(kTimeWords);
     const bool emotion = s.Has(kEmotionWords);
@@ -226,6 +248,8 @@ const char* VoiceShortcutName(VoiceShortcut shortcut) {
             return "emotion mode";
         case VoiceShortcut::ToggleMode:
             return "toggle mode";
+        case VoiceShortcut::TimerMode:
+            return "timer mode";
         case VoiceShortcut::LightTheme:
             return "light theme";
         case VoiceShortcut::DarkTheme:

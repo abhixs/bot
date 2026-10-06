@@ -112,12 +112,16 @@ RoboEyes::Mood RoboEyes::EffectiveMood() const {
             // Standby: big square "surprised" eyes that drift around and blink slowly.
             return Mood::Surprised;
         case Activity::Setup:
-        case Activity::Thinking:
             return Mood::Loading;
         case Activity::Music:
             return Mood::HappyClosed;
+        // Voice states: always the same face, so it is clear what the device is doing.
+        case Activity::WakeHeard:
+            return Mood::Sweet;
+        case Activity::Listening:
+            return Mood::Blush;
         case Activity::Speaking:
-            return mood_ == Mood::Focused ? Mood::Speaking : mood_;
+            return Mood::Excited;
         default:
             break;
     }
@@ -500,12 +504,12 @@ void RoboEyes::Draw(lv_layer_t* layer) {
     const Mood mood = shown_mood_;
     switch (activity_) {
         case Activity::Listening:
-            // Slightly bigger and steady, with a very slow "breath".
-            scale = 1.12f + 0.03f * std::sin(time_ms_ * 2.0f * kPi / 2400.0f);
+            // Steady, with a very slow, small "breath".
+            scale = 1.0f + 0.05f * (0.5f - 0.5f * std::cos(time_ms_ * 2.0f * kPi / 3200.0f));
             break;
         case Activity::Speaking:
-            // Calm, even pulse instead of random jumps: no position change at all.
-            scale = 1.0f + 0.12f * (0.5f - 0.5f * std::cos(time_ms_ * 2.0f * kPi / 1200.0f));
+            // Slow, even pulse instead of random jumps: no position change at all.
+            scale = 1.0f + 0.07f * (0.5f - 0.5f * std::cos(time_ms_ * 2.0f * kPi / 2000.0f));
             break;
         case Activity::Music: {
             float beat = 0.5f - 0.5f * std::cos(time_ms_ * 2.0f * kPi / 1090.0f);

@@ -248,8 +248,8 @@ void AlarmManager::RegisterTools() {
         "self.alarm.set_timer",
         "Start a countdown timer on the device, e.g. 'set a 10 minute timer', 'remind me in "
         "30 seconds' or a Pomodoro ('pomodoro timer' = 25 minute focus, label 'Focus'; a break "
-        "is 5 minutes, label 'Break'). Give the duration as minutes and/or seconds. While it runs "
-        "the screen shows the remaining minutes and seconds.",
+        "is 5 minutes, label 'Break'). Give the duration as minutes and/or seconds. A timer under "
+        "31 minutes shows its countdown on the screen at once.",
         PropertyList({
             Property("minutes", kPropertyTypeInteger, 0, 0, 1440),
             Property("seconds", kPropertyTypeInteger, 0, 0, 3600),
@@ -280,6 +280,9 @@ void AlarmManager::RegisterTools() {
                 SaveLocked();
             }
             ESP_LOGI(TAG, "Timer %d set for %d s", alarm.id, total);
+            if (on_timer_set_) {
+                on_timer_set_(total);
+            }
             cJSON* result = cJSON_CreateObject();
             cJSON_AddBoolToObject(result, "success", true);
             cJSON_AddNumberToObject(result, "id", alarm.id);

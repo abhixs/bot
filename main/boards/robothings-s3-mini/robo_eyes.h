@@ -44,11 +44,13 @@ public:
         Crying,   // sad pupils with falling tears
     };
 
-    // What the assistant is doing right now (derived from the device state).
+    // What the assistant is doing right now (derived from the device state). The
+    // voice states have fixed faces from the expression sheet:
+    // WakeHeard = Sweet, Listening = Blush, Speaking = Excited.
     enum class Activity {
         Idle,
+        WakeHeard,  // the wake word was just heard: ready for the command
         Listening,
-        Thinking,  // connecting / waiting for the server
         Speaking,
         Setup,     // Wi-Fi setup, activation, upgrade
         Sleeping,  // idle for a while / power-save
@@ -122,7 +124,7 @@ private:
     // Expression change: squash the old symbol flat, swap, open the new one.
     Mood shown_mood_ = Mood::Focused;
     int32_t swap_elapsed_ms_ = -1;  // -1 = no swap running
-    static constexpr int32_t kSwapHalfMs = 130;
+    static constexpr int32_t kSwapHalfMs = 180;  // calm squash between faces
 
     uint32_t time_ms_ = 0;
     uint32_t random_state_ = 0x1234567u;

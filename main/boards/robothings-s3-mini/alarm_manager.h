@@ -48,6 +48,8 @@ public:
     // Called on the main task when an alarm starts / stops ringing.
     void OnRingStart(std::function<void(const RingInfo&)> cb) { on_ring_start_ = std::move(cb); }
     void OnRingStop(std::function<void()> cb) { on_ring_stop_ = std::move(cb); }
+    // Called on the main task when a timer is started by voice, with its length.
+    void OnTimerSet(std::function<void(int seconds)> cb) { on_timer_set_ = std::move(cb); }
 
     bool IsRinging() const { return ringing_; }
     // Seconds until the soonest running timer ends (for the on-screen countdown),
@@ -82,5 +84,6 @@ private:
     bool idle_seen_while_ringing_ = false;  // only touched on the main task
     RingInfo current_ring_;
     std::function<void(const RingInfo&)> on_ring_start_;
+    std::function<void(int)> on_timer_set_;
     std::function<void()> on_ring_stop_;
 };

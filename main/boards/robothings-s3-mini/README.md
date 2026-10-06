@@ -45,18 +45,28 @@ Commands are recognised from their key words, so natural variations work.
   - **Emotion mode**: "show face", "show emotions", "emotions dikhao", "face dikhao",
     "change the mode to emotions". The animated eyes and emotions.
   - **"Change the mode" / "switch mode"** switches to the other one.
-  - Alarms, a running timer / Pomodoro (while idle) and setup screens take over the
-    screen for a while and then hand it back to the chosen mode.
+  - Alarms and setup screens take over the screen for a while and then hand it back to
+    the chosen mode.
 - **Theme** (saved): "light mode", "invert the screen", "make screen white", "screen ko
   light mode pe kardo" invert the panel; "dark mode", "turn off light mode", "screen
   dark karo" return to the default dark screen.
 - **"Time format 12 hours / 24 hours pe kar do"**: switches the clock format (saved).
-- **"Pomodoro timer lagao" / "10 minute ka timer"**: while a timer runs and the device
-  is idle, the screen counts down minutes : seconds in the same dot font.
 - **"Roo ke dikhao", "Gussa dikhao", "Dil wali aankhein dikhao"...**: shows that
   expression (crying, angry, in love, ...) for a few seconds.
-- Standby (emotion mode) shows big square eyes drifting slowly inside invisible eye
-  circles, with slow, relaxed blinks.
+- **"Show timer" / "show countdown" / "timer dikhao"**: shows the countdown of the
+  shortest running timer, also while talking, until another mode is chosen. A timer
+  under 31 minutes (e.g. "set a timer for 10 minutes", a Pomodoro) switches to its
+  countdown by itself as soon as it is set.
+- **Voice states (emotion mode)**, each with one face from the expression sheet:
+  standby = big square eyes drifting slowly with relaxed blinks; wake word heard =
+  Sweet; listening = Blush (also while the reply is prepared: no thinking face);
+  speaking = Excited.
+- **No text on the screen**: only the clock and countdown digits. Alarms, setup and
+  notifications are shown with the eyes and sounds only (the activation code is read
+  out loud).
+- **"Alexa"** plays the short "popup" sound and listening starts at once, from
+  standby and during a conversation; the wake word is not sent to the server, so there
+  is no spoken greeting.
 
 ## Microphone, echo cancellation and alarms
 

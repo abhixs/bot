@@ -19,6 +19,7 @@ enum class VoiceShortcut {
     TimeMode,       // "show time", "clock dikhao", "change the mode to time"
     EmotionMode,    // "show face", "emotions dikhao", "change the mode to emotions"
     ToggleMode,     // "change the mode", "switch mode"
+    TimerMode,      // "show timer", "show countdown", "timer dikhao"
     LightTheme,     // "light mode", "invert the screen", "make screen white"
     DarkTheme,      // "dark mode", "turn off light mode", "screen dark karo"
 };
