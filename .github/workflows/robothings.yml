@@ -42,12 +42,14 @@ jobs:
             echo "- online music (Jamendo): using the default client ID from the code" >> "$GITHUB_STEP_SUMMARY"
           fi
 
-      - name: Build settings (wake word download URL)
+      - name: Build settings (wake word download mirrors)
         shell: bash
         run: |
           OWNER="${{ github.repository_owner }}"
+          OWNER_LC=$(echo "$OWNER" | tr 'A-Z' 'a-z')
           REPO="${{ github.event.repository.name }}"
-          printf '#pragma once\n#define WAKEWORD_ASSETS_URL "https://raw.githubusercontent.com/%s/%s/gh-pages/wakewords/"\n' "$OWNER" "$REPO" \
+          URLS="https://cdn.jsdelivr.net/gh/$OWNER/$REPO@gh-pages/wakewords/;https://raw.githubusercontent.com/$OWNER/$REPO/gh-pages/wakewords/;https://$OWNER_LC.github.io/$REPO/wakewords/;https://fastly.jsdelivr.net/gh/$OWNER/$REPO@gh-pages/wakewords/"
+          printf '#pragma once\n#define WAKEWORD_ASSETS_URLS "%s"\n' "$URLS" \
             > main/boards/robothings-s3-mini/robothings_build_config.h
           cat main/boards/robothings-s3-mini/robothings_build_config.h
 

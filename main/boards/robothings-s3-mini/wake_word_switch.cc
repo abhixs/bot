@@ -7,6 +7,9 @@
 #include "mcp_server.h"
 #include "settings.h"
 
+#include <http.h>
+#include <network_interface.h>
+
 #include <cJSON.h>
 #include <esp_log.h>
 #include <esp_timer.h>
@@ -14,17 +17,19 @@
 #include <cctype>
 #include <cstring>
 #include <string>
+#include <vector>
 
 #define TAG "WakeWordSwitch"
 
-// Base URL of the published wake-word assets, written by CI into
-// robothings_build_config.h. It points at the raw files of the gh-pages branch
-// (raw.githubusercontent.com), so it works even when GitHub Pages is switched off.
+// Mirrors of the published wake-word assets (';'-separated base URLs), written by
+// CI into robothings_build_config.h: jsDelivr, raw.githubusercontent.com and GitHub
+// Pages. Some Indian ISPs block raw.githubusercontent.com, so the device checks
+// which one answers before it restarts to download.
 #if __has_include("robothings_build_config.h")
 #include "robothings_build_config.h"
 #endif
-#ifndef WAKEWORD_ASSETS_URL
-#define WAKEWORD_ASSETS_URL ""
+#ifndef WAKEWORD_ASSETS_URLS
+#define WAKEWORD_ASSETS_URLS ""
 #endif
 
 namespace {
@@ -114,6 +119,55 @@ const WakeWord* InstalledWakeWord() {
 std::string InstalledName() {
     const WakeWord* w = InstalledWakeWord();
     return w != nullptr ? w->name : "Alexa";
+}
+
+std::vector<std::string> MirrorBases() {
+    std::vector<std::string> bases;
+    std::string all = WAKEWORD_ASSETS_URLS;
+    size_t start = 0;
+    while (start < all.size()) {
+        size_t end = all.find(';', start);
+        if (end == std::string::npos) end = all.size();
+        if (end > start) bases.push_back(all.substr(start, end - start));
+        start = end + 1;
+    }
+    return bases;
+}
+
+std::string HostOf(const std::string& url) {
+    size_t begin = url.find("//");
+    begin = begin == std::string::npos ? 0 : begin + 2;
+    size_t end = url.find('/', begin);
+    return url.substr(begin, end == std::string::npos ? std::string::npos : end - begin);
+}
+
+// Checks a URL the same way the assets updater will use it: a direct 200 answer
+// (no redirect) with a Content-Length. Reads only the headers.
+bool Probe(const std::string& url, std::string& problem) {
+    auto http = Board::GetInstance().GetNetwork()->CreateHttp(0);
+    http->SetTimeout(5000);
+    if (auto opened = http->Open("GET", url); !opened) {
+        problem = "cannot connect (" + opened.error().ToString() + ")";
+        return false;
+    }
+    auto status = http->GetStatusCode();
+    if (!status) {
+        problem = "no answer (" + status.error().ToString() + ")";
+        http->Close();
+        return false;
+    }
+    if (*status != 200) {
+        problem = "HTTP " + std::to_string(*status);
+        http->Close();
+        return false;
+    }
+    if (http->GetBodyLength() == 0) {
+        problem = "no Content-Length";
+        http->Close();
+        return false;
+    }
+    http->Close();
+    return true;
 }
 
 void RebootSoon() {
@@ -207,8 +261,8 @@ void RegisterWakeWordTools() {
             "the user asks for another name, explain it is not available and list the options.",
         PropertyList({Property("name", kPropertyTypeString).SetMaxLength(40)}),
         [names](const PropertyList& properties) -> ToolResult {
-            const std::string base = WAKEWORD_ASSETS_URL;
-            if (base.empty()) {
+            const std::vector<std::string> bases = MirrorBases();
+            if (bases.empty()) {
                 return std::unexpected(std::string(
                     "Wake word switching is not set up in this firmware build."));
             }
@@ -220,9 +274,30 @@ void RegisterWakeWordTools() {
             if (InstalledName() == word->name) {
                 return std::string("{\"success\":true,\"note\":\"already using this wake word\"}");
             }
+            // Find a mirror this network can reach before restarting.
+            std::string url;
+            std::string problems;
+            for (const auto& base : bases) {
+                std::string problem;
+                const std::string candidate = base + word->model + ".bin";
+                if (Probe(candidate, problem)) {
+                    url = candidate;
+                    break;
+                }
+                ESP_LOGW(TAG, "%s: %s", HostOf(base).c_str(), problem.c_str());
+                problems += (problems.empty() ? "" : "; ") + HostOf(base) + ": " + problem;
+            }
+            if (url.empty()) {
+                return std::unexpected(
+                    "Could not reach any download server for the wake word (" + problems +
+                    "). The internet provider may be blocking them. Tell the user to try again "
+                    "on another Wi-Fi or a mobile hotspot, or to switch on GitHub Pages for the "
+                    "repository. The wake word was not changed.");
+            }
+            ESP_LOGI(TAG, "Wake word download URL: %s", url.c_str());
             {
                 Settings assets("assets", true);
-                assets.SetString("download_url", base + word->model + ".bin");
+                assets.SetString("download_url", url);
             }
             {
                 Settings settings("wakeword", true);
