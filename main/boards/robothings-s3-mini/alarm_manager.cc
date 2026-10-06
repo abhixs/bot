@@ -16,10 +16,7 @@
 namespace {
 constexpr const char* kNvsNamespace = "alarms";
 constexpr const char* kNvsKey = "list";
-// The beep (about 0.9 s) repeats every 3.5 s. The quiet gaps let the wake word be
-// heard: with no echo cancellation the microphone cannot hear "Alexa" over the beep.
-constexpr int kRingTickMs = 250;
-constexpr int kRingPeriodMs = 3500;
+constexpr int kRingIntervalMs = 1500;
 
 std::string TwoDigitTime(int hour, int minute) {
     char buf[8];
@@ -403,11 +400,9 @@ void AlarmManager::StartRinging(const RingInfo& info) {
         }
     }
     ring_elapsed_ms_ = 0;
-    next_tone_ms_ = 0;
-    next_toggle_ms_ = 0;
     idle_seen_while_ringing_ = false;
     esp_timer_stop(ring_timer_);
-    esp_timer_start_periodic(ring_timer_, kRingTickMs * 1000);
+    esp_timer_start_periodic(ring_timer_, kRingIntervalMs * 1000);
     RingTick();
 }
 
@@ -419,18 +414,14 @@ void AlarmManager::RingTick() {
         Application::GetInstance().Schedule([this]() { StopRinging(0); });
         return;
     }
-    const int elapsed = ring_elapsed_ms_;
-    ring_elapsed_ms_ += kRingTickMs;
+    ring_elapsed_ms_ += kRingIntervalMs;
     auto& app = Application::GetInstance();
-    app.Schedule([this, &app, elapsed]() {
+    app.Schedule([this, &app]() {
         if (!ringing_) return;
         switch (app.GetDeviceState()) {
             case kDeviceStateIdle:
                 idle_seen_while_ringing_ = true;
-                if (elapsed >= next_tone_ms_) {
-                    next_tone_ms_ = elapsed + kRingPeriodMs;
-                    app.PlaySound(AlarmToneOgg());
-                }
+                app.PlaySound(AlarmToneOgg());
                 break;
             case kDeviceStateListening:
             case kDeviceStateSpeaking:
@@ -440,12 +431,9 @@ void AlarmManager::RingTick() {
                     // (or pressed talk): that means "I'm awake", so stop the alarm and
                     // let the conversation go on.
                     StopRinging(0);
-                } else if (app.GetDeviceState() != kDeviceStateConnecting &&
-                           elapsed >= next_toggle_ms_) {
+                } else if (app.GetDeviceState() != kDeviceStateConnecting) {
                     // A conversation left over from setting the alarm: end it so the
-                    // alarm can be heard (not too often: a late toggle on an idle
-                    // device would open a new conversation).
-                    next_toggle_ms_ = elapsed + 1500;
+                    // alarm can be heard.
                     app.ToggleChatState();
                 }
                 break;

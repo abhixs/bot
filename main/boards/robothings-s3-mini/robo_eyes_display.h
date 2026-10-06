@@ -45,16 +45,8 @@ public:
     // overriding automatic emotions and sleep. Returns false for unknown names.
     bool HoldExpression(const std::string& name, int seconds);
 
-    // What the screen shows, also while talking: the animated eyes or a big
-    // dot-matrix clock. Saved, so it survives a restart.
-    enum class FaceMode { Eyes, Clock };
-    void SetFaceMode(FaceMode mode);
-    FaceMode face_mode() const { return clock_face_ ? FaceMode::Clock : FaceMode::Eyes; }
-
-    // Light mode shows the screen inverted (lit background, dark drawing). Saved;
-    // dark is the default.
-    void SetLightMode(bool light);
-    bool light_mode() const { return light_mode_; }
+    // Dot-matrix clock instead of the eyes until the user talks again.
+    void ShowClock();
 
     // Everything the user says (speech-to-text), for local voice shortcuts.
     void OnUserSpeech(std::function<void(const std::string&)> cb) { on_user_speech_ = std::move(cb); }
@@ -99,10 +91,10 @@ private:
     // Keep a real emotion for a moment instead of flicking back to neutral.
     uint32_t last_emotion_ms_ = 0;
 
-    bool clock_face_ = false;
-    bool light_mode_ = false;
+    // Clock mode: on until the next conversation starts.
+    bool clock_mode_ = false;
+    bool clock_seen_idle_ = false;
     bool dots_visible_ = false;
-    void ApplyLightModeLocked();
 
     std::function<void(const std::string&)> on_user_speech_;
     std::function<int()> countdown_;

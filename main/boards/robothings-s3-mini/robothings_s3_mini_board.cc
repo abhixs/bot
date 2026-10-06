@@ -22,7 +22,6 @@
 #include <esp_timer.h>
 
 #include <algorithm>
-#include <atomic>
 #include <cctype>
 #include <cstring>
 #include <string>
@@ -74,27 +73,6 @@ private:
     bool power_ = false;
 };
 
-// I2S codec with a mute switch: "bye" silences any reply that is still arriving
-// at once, without touching the saved volume.
-class MutableSimplexCodec : public NoAudioCodecSimplex {
-public:
-    using NoAudioCodecSimplex::NoAudioCodecSimplex;
-    void SetMuted(bool muted) { muted_.store(muted); }
-
-protected:
-    int Write(const int16_t* data, int samples) override {
-        if (muted_.load()) {
-            silence_.assign(samples, 0);  // keep the I2S timing, play silence
-            return NoAudioCodecSimplex::Write(silence_.data(), samples);
-        }
-        return NoAudioCodecSimplex::Write(data, samples);
-    }
-
-private:
-    std::atomic<bool> muted_{false};
-    std::vector<int16_t> silence_;  // only used by the audio output task
-};
-
 namespace {
 
 // Lower-case ASCII, drop punctuation, collapse spaces, and remove a leading or
@@ -136,65 +114,6 @@ bool IsOneOf(const std::string& text, std::initializer_list<const char*> phrases
     return false;
 }
 
-// "Bye" in the ways speech-to-text writes it (the server may answer in Chinese).
-bool IsBye(const std::string& t) {
-    return IsOneOf(t, {"bye", "bye bye", "byebye", "bye bye bye", "ok bye", "okay bye",
-                       "ok bye bye", "okay bye bye", "goodbye", "good bye", "bye now", "tata",
-                       "ta ta", "bye alexa", "बाय", "बाय बाय", "बायबाय", "बाई", "बाई बाई",
-                       "टाटा", "拜拜", "拜", "再见", "拜拜拜拜"});
-}
-
-bool IsQuiet(const std::string& t) {
-    return IsOneOf(t, {"chup raho", "chup raho ab", "ab chup raho", "chup ho jao", "chup",
-                       "shut up", "stop talking", "चुप रहो", "चुप रहो अब", "अब चुप रहो",
-                       "चुप हो जाओ", "चुप"});
-}
-
-bool IsSleep(const std::string& t) {
-    return IsOneOf(t, {"so jao", "soja", "so ja", "go to sleep", "सो जाओ", "सो जा"});
-}
-
-bool IsClockMode(const std::string& t) {
-    return IsOneOf(t, {"show clock", "show the clock", "show time", "show the time",
-                       "show time clock", "show clock time", "clock mode", "time mode",
-                       "clock mode on", "time mode on", "clock mode on karo", "time mode on karo",
-                       "switch to clock mode", "switch to time mode", "clock dikhao",
-                       "ghadi dikhao", "time dikhao", "clock show karo", "time show karo",
-                       "शो क्लॉक", "शो टाइम", "क्लॉक दिखाओ", "घड़ी दिखाओ", "टाइम दिखाओ",
-                       "क्लॉक मोड", "टाइम मोड"});
-}
-
-bool IsFaceMode(const std::string& t) {
-    return IsOneOf(t, {"show face", "show the face", "show face animation",
-                       "show face animations", "show the face animation",
-                       "show the face animations", "show faces", "show eyes", "show the eyes",
-                       "show emotions", "face mode", "face mode on", "face mode on karo",
-                       "emotion mode", "switch to face mode", "face dikhao", "eyes dikhao",
-                       "aankhen dikhao", "face animation dikhao", "शो फेस", "फेस दिखाओ",
-                       "फेस मोड", "आंखें दिखाओ"});
-}
-
-bool IsToggleMode(const std::string& t) {
-    return IsOneOf(t, {"change the mode", "change mode", "change the display mode",
-                       "change display mode", "switch mode", "switch the mode", "mode change",
-                       "mode change karo", "mode change kar do", "mode badlo", "mode badal do",
-                       "चेंज द मोड", "चेंज मोड", "मोड बदलो", "मोड बदल दो", "मोड चेंज करो"});
-}
-
-bool IsLightMode(const std::string& t) {
-    return IsOneOf(t, {"light mode", "light mode on", "light mode on karo", "light theme",
-                       "switch to light mode", "enable light mode", "turn on light mode",
-                       "make the screen light", "screen light mode", "white mode",
-                       "light mode kar do", "लाइट मोड", "लाइट मोड ऑन करो"});
-}
-
-bool IsDarkMode(const std::string& t) {
-    return IsOneOf(t, {"dark mode", "dark mode on", "dark mode on karo", "dark theme",
-                       "switch to dark mode", "enable dark mode", "turn on dark mode",
-                       "make the screen dark", "screen dark mode", "black mode",
-                       "dark mode kar do", "डार्क मोड", "डार्क मोड ऑन करो"});
-}
-
 }  // namespace
 
 class RoboThingsS3MiniBoard : public WifiBoard {
@@ -205,17 +124,13 @@ private:
     Display* display_ = nullptr;
     RoboEyesDisplay* eyes_display_ = nullptr;
     RelayLamp* lamp_ = nullptr;
-    MutableSimplexCodec* codec_ = nullptr;
     esp_timer_handle_t standby_timer_ = nullptr;
-    int64_t idle_since_us_ = 0;
     int64_t standby_deadline_us_ = 0;
     int64_t last_toggle_us_ = 0;
 
-    // Ends the conversation right away, without the assistant replying: the speaker
-    // is muted at once and stays muted until the device is back in standby.
+    // Ends the conversation right away, without the assistant replying.
     void GoStandby() {
-        if (codec_ != nullptr) codec_->SetMuted(true);
-        Application::GetInstance().GetAudioService().ResetDecoder();
+        if (eyes_display_ != nullptr) eyes_display_->HoldExpression("sleeping", 3);
         if (standby_timer_ == nullptr) {
             esp_timer_create_args_t args = {
                 .callback = [](void* arg) { static_cast<RoboThingsS3MiniBoard*>(arg)->StandbyTick(); },
@@ -228,7 +143,6 @@ private:
         }
         standby_deadline_us_ = esp_timer_get_time() + 6LL * 1000000;
         last_toggle_us_ = 0;
-        idle_since_us_ = 0;
         esp_timer_stop(standby_timer_);
         esp_timer_start_periodic(standby_timer_, 150 * 1000);
         StandbyTick();
@@ -238,21 +152,13 @@ private:
         auto& app = Application::GetInstance();
         const DeviceState state = app.GetDeviceState();
         const int64_t now = esp_timer_get_time();
-        if (state == kDeviceStateIdle) {
-            // Stay muted a moment longer so nothing of the cut reply slips out.
-            if (idle_since_us_ == 0) idle_since_us_ = now;
-            if (now - idle_since_us_ < 400 * 1000 && now <= standby_deadline_us_) return;
-        }
         if (state == kDeviceStateIdle || now > standby_deadline_us_) {
             esp_timer_stop(standby_timer_);
-            app.GetAudioService().ResetDecoder();
-            if (codec_ != nullptr) codec_->SetMuted(false);
             return;
         }
-        idle_since_us_ = 0;
         if (state == kDeviceStateListening || state == kDeviceStateSpeaking) {
-            app.GetAudioService().ResetDecoder();  // drop any reply right away
-            if (now - last_toggle_us_ > 300 * 1000) {
+            app.GetAudioService().ResetDecoder();  // silence any reply right away
+            if (now - last_toggle_us_ > 400 * 1000) {
                 // speaking: abort the reply; listening: close the conversation
                 app.ToggleChatState();
                 last_toggle_us_ = now;
@@ -264,34 +170,21 @@ private:
     // they act at once (the AI does not get to answer).
     void HandleUserSpeech(const std::string& raw) {
         const std::string text = NormalizeSpeech(raw);
-        if (IsBye(text) || IsQuiet(text)) {
+        if (IsOneOf(text, {"bye", "bye bye", "byebye", "ok bye", "okay bye", "bye bye alexa",
+                           "chup raho", "chup raho ab", "ab chup raho", "chup ho jao", "chup",
+                           "so jao", "soja", "so ja", "go to sleep", "shut up", "stop talking",
+                           "बाय", "बाय बाय", "बाय-बाय", "चुप रहो", "चुप रहो अब", "अब चुप रहो",
+                           "चुप हो जाओ", "सो जाओ", "सो जा"})) {
             ESP_LOGI(TAG, "Voice shortcut: standby (%s)", raw.c_str());
             GoStandby();
             return;
         }
-        if (IsSleep(text)) {
-            ESP_LOGI(TAG, "Voice shortcut: sleep (%s)", raw.c_str());
-            GoStandby();
-            if (eyes_display_ != nullptr) eyes_display_->HoldExpression("sleeping", 8);
-            return;
-        }
-        if (eyes_display_ == nullptr) return;
-        using Mode = RoboEyesDisplay::FaceMode;
-        if (IsClockMode(text) || IsFaceMode(text) || IsToggleMode(text)) {
-            Mode mode = IsClockMode(text)  ? Mode::Clock
-                        : IsFaceMode(text) ? Mode::Eyes
-                        : (eyes_display_->face_mode() == Mode::Clock ? Mode::Eyes : Mode::Clock);
-            ESP_LOGI(TAG, "Voice shortcut: %s mode (%s)", mode == Mode::Clock ? "clock" : "face",
-                     raw.c_str());
-            GoStandby();
-            eyes_display_->SetFaceMode(mode);
-            return;
-        }
-        if (IsLightMode(text) || IsDarkMode(text)) {
-            const bool light = IsLightMode(text);
-            ESP_LOGI(TAG, "Voice shortcut: %s mode (%s)", light ? "light" : "dark", raw.c_str());
-            GoStandby();
-            eyes_display_->SetLightMode(light);
+        if (IsOneOf(text, {"show clock", "show the clock", "clock dikhao", "ghadi dikhao",
+                           "time dikhao", "show time", "शो क्लॉक", "क्लॉक दिखाओ", "घड़ी दिखाओ",
+                           "टाइम दिखाओ"})) {
+            ESP_LOGI(TAG, "Voice shortcut: clock (%s)", raw.c_str());
+            GoStandby();  // first: it shows sleeping eyes, which the clock then replaces
+            if (eyes_display_ != nullptr) eyes_display_->ShowClock();
             return;
         }
     }
@@ -416,14 +309,8 @@ private:
         });
     }
 
-    // WakeNet threshold while an alarm rings (0.4 - 0.9999, lower = more sensitive).
-    static constexpr float kRingingWakeThreshold = 0.45f;
-
     void InitializeTools() {
         lamp_ = new RelayLamp(LAMP_GPIO);
-        // Keep the words said right after "Alexa" (while the connection opens), so
-        // the server hears the whole sentence.
-        Application::GetInstance().GetAudioService().EnableWakeWordSpeechBridge(true);
         ClockSync::GetInstance().Initialize();  // keep the clock on IST
         RegisterWakeWordTools();
 
@@ -443,8 +330,6 @@ private:
         auto& alarms = AlarmManager::GetInstance();
         alarms.OnRingStart([this](const AlarmManager::RingInfo& info) {
             MusicPlayer::GetInstance().Stop();  // the alarm takes over the speaker
-            // Hear even a soft "Alexa" between the beeps.
-            Application::GetInstance().GetAudioService().SetWakeWordThreshold(kRingingWakeThreshold);
             if (info.lamp && lamp_ != nullptr) {
                 lamp_->Set(true);
             }
@@ -456,7 +341,6 @@ private:
             }
         });
         alarms.OnRingStop([this]() {
-            Application::GetInstance().GetAudioService().SetWakeWordThreshold(0.0f);  // default
             if (eyes_display_ != nullptr) {
                 eyes_display_->ClearAlarmBanner();
             }
@@ -493,31 +377,13 @@ private:
                 return true;
             });
         mcp.AddTool(
-            "self.screen.set_mode",
-            "Choose what the screen shows, also while talking (it is remembered after a "
-            "restart): 'clock' = big dot-matrix clock, 'face' = animated eyes / emotions, "
-            "'toggle' = switch to the other one. Use for 'change the mode', 'show time', "
-            "'show clock', 'show face', 'show face animations', 'clock mode', 'face mode'.",
-            PropertyList({Property("mode", kPropertyTypeString).SetMaxLength(10)}),
-            [this](const PropertyList& properties) -> ToolResult {
+            "self.screen.show_clock",
+            "Replace the eyes with a big dot-matrix clock (hours | minutes) until the user talks "
+            "again. Use for 'show clock', 'clock dikhao', 'ghadi dikhao'.",
+            PropertyList(), [this](const PropertyList&) -> ToolResult {
                 if (eyes_display_ == nullptr) return std::unexpected(std::string("No display"));
-                using Mode = RoboEyesDisplay::FaceMode;
-                std::string mode = properties["mode"].value<std::string>();
-                std::transform(mode.begin(), mode.end(), mode.begin(),
-                               [](unsigned char c) { return static_cast<char>(tolower(c)); });
-                Mode target;
-                if (mode == "clock" || mode == "time") {
-                    target = Mode::Clock;
-                } else if (mode == "face" || mode == "eyes" || mode == "emotion") {
-                    target = Mode::Eyes;
-                } else if (mode == "toggle") {
-                    target = eyes_display_->face_mode() == Mode::Clock ? Mode::Eyes : Mode::Clock;
-                } else {
-                    return std::unexpected(std::string("mode must be clock, face or toggle"));
-                }
-                eyes_display_->SetFaceMode(target);
-                return std::string(target == Mode::Clock ? "{\"mode\":\"clock\"}"
-                                                         : "{\"mode\":\"face\"}");
+                eyes_display_->ShowClock();
+                return true;
             });
         mcp.AddTool(
             "self.assistant.standby",
@@ -549,11 +415,10 @@ public:
 
     AudioCodec* GetAudioCodec() override {
 #ifdef AUDIO_I2S_METHOD_SIMPLEX
-        static MutableSimplexCodec audio_codec(
+        static NoAudioCodecSimplex audio_codec(
             AUDIO_INPUT_SAMPLE_RATE, AUDIO_OUTPUT_SAMPLE_RATE, AUDIO_I2S_SPK_GPIO_BCLK,
             AUDIO_I2S_SPK_GPIO_LRCK, AUDIO_I2S_SPK_GPIO_DOUT, AUDIO_I2S_MIC_GPIO_SCK,
             AUDIO_I2S_MIC_GPIO_WS, AUDIO_I2S_MIC_GPIO_DIN);
-        codec_ = &audio_codec;
 #else
         static NoAudioCodecDuplex audio_codec(AUDIO_INPUT_SAMPLE_RATE, AUDIO_OUTPUT_SAMPLE_RATE,
                                               AUDIO_I2S_GPIO_BCLK, AUDIO_I2S_GPIO_WS,

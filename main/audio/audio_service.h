@@ -52,7 +52,6 @@
 #define AS_EVENT_WAKE_WORD_RUNNING (1 << 1)
 #define AS_EVENT_AUDIO_PROCESSOR_RUNNING (1 << 2)
 #define AS_EVENT_AUDIO_INPUT_STOP_REQUEST (1 << 4)
-#define AS_EVENT_BRIDGE_CAPTURING (1 << 5)
 
 #define AS_OPUS_GET_FRAME_DRU_ENUM(duration_ms)                  \
     ((duration_ms) == 5     ? ESP_OPUS_ENC_FRAME_DURATION_5_MS   \
@@ -152,14 +151,6 @@ public:
     void ResetDecoder();
     void SetModelsList(srmodel_list_t* models_list);
 
-    // Speech bridge (off by default): keeps recording after the wake word while the
-    // audio channel opens and sends that speech ahead of the live microphone audio
-    // once listening starts, so words said right after the wake word are not lost.
-    void EnableWakeWordSpeechBridge(bool enable) { bridge_enabled_.store(enable); }
-    // Wake word detection threshold (0.4 - 0.9999, lower is more sensitive); a value
-    // <= 0 restores the model default.
-    void SetWakeWordThreshold(float threshold);
-
 private:
     AudioCodec* codec_ = nullptr;
     AudioServiceCallbacks callbacks_;
@@ -222,21 +213,6 @@ private:
     esp_timer_handle_t audio_power_timer_ = nullptr;
     std::chrono::steady_clock::time_point last_input_time_;
     std::chrono::steady_clock::time_point last_output_time_;
-
-    enum BridgeState { kBridgeOff, kBridgeCapturing, kBridgeDraining };
-    static constexpr size_t kBridgeMaxSamples = 16000 * 4;  // 4 s, in PSRAM
-    std::atomic<bool> bridge_enabled_{false};
-    std::atomic<int> bridge_state_{kBridgeOff};
-    std::mutex bridge_mutex_;
-    int16_t* bridge_buffer_ = nullptr;
-    size_t bridge_head_ = 0;
-    size_t bridge_size_ = 0;
-    void BridgeStart();
-    void BridgeStop();
-    bool BridgeBeginDrain();
-    void BridgeAppendLocked(const int16_t* data, size_t samples, size_t stride);
-    bool BridgePopFrame(std::vector<int16_t>& frame);
-    bool BridgeWantsEncodeLocked() const;
 
     void AudioInputTask();
     void AudioOutputTask();

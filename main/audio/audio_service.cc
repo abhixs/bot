@@ -1,7 +1,5 @@
 #include "audio_service.h"
-#include <esp_heap_caps.h>
 #include <esp_log.h>
-#include <algorithm>
 #include <cstring>
 
 #define RATE_CVT_CFG(_src_rate, _dest_rate, _channel)                                        \
@@ -32,9 +30,6 @@ AudioService::AudioService() { event_group_ = xEventGroupCreate(); }
 AudioService::~AudioService() {
     if (event_group_ != nullptr) {
         vEventGroupDelete(event_group_);
-    }
-    if (bridge_buffer_ != nullptr) {
-        heap_caps_free(bridge_buffer_);
     }
     if (opus_encoder_ != nullptr) {
         esp_opus_enc_close(opus_encoder_);
@@ -90,17 +85,6 @@ void AudioService::Initialize(AudioCodec* codec) {
     audio_engine_ = std::make_unique<LiteAudioEngine>();
 #endif
     audio_engine_->OnOutput([this](std::vector<int16_t>&& data) {
-        if (bridge_state_.load() == kBridgeDraining) {
-            // Older speech is still queued in the bridge: keep the order.
-            std::unique_lock<std::mutex> bridge_lock(bridge_mutex_);
-            if (bridge_state_.load() == kBridgeDraining) {
-                BridgeAppendLocked(data.data(), data.size(), 1);
-                bridge_lock.unlock();
-                { std::lock_guard<std::mutex> lock(audio_queue_mutex_); }
-                audio_queue_cv_.notify_all();
-                return;
-            }
-        }
         PushTaskToEncodeQueue(kAudioTaskTypeEncodeToSendQueue, std::move(data));
     });
     audio_engine_->OnVadStateChange([this](bool speaking) {
@@ -110,7 +94,6 @@ void AudioService::Initialize(AudioCodec* codec) {
         }
     });
     audio_engine_->OnWakeWordDetected([this](const std::string& wake_word) {
-        BridgeStart();
         xEventGroupClearBits(event_group_, AS_EVENT_WAKE_WORD_RUNNING);
         if (callbacks_.on_wake_word_detected) {
             callbacks_.on_wake_word_detected(wake_word);
@@ -257,9 +240,9 @@ bool AudioService::ReadAudioData(std::vector<int16_t>& data, int sample_rate, in
 }
 
 void AudioService::AudioInputTask() {
-    constexpr EventBits_t kAudioInputActiveBits =
-        AS_EVENT_AUDIO_TESTING_RUNNING | AS_EVENT_WAKE_WORD_RUNNING |
-        AS_EVENT_AUDIO_PROCESSOR_RUNNING | AS_EVENT_BRIDGE_CAPTURING;
+    constexpr EventBits_t kAudioInputActiveBits = AS_EVENT_AUDIO_TESTING_RUNNING |
+                                                  AS_EVENT_WAKE_WORD_RUNNING |
+                                                  AS_EVENT_AUDIO_PROCESSOR_RUNNING;
 
     while (true) {
         EventBits_t bits = xEventGroupWaitBits(
@@ -319,19 +302,6 @@ void AudioService::AudioInputTask() {
                     data = std::move(mono_data);
                 }
                 PushTaskToEncodeQueue(kAudioTaskTypeEncodeToTestingQueue, std::move(data));
-                continue;
-            }
-        }
-
-        /* Speech bridge: record what follows the wake word until listening starts */
-        if ((bits & AS_EVENT_BRIDGE_CAPTURING) && !(bits & AS_EVENT_AUDIO_PROCESSOR_RUNNING)) {
-            std::vector<int16_t> data;
-            if (ReadAudioData(data, 16000, 160)) {
-                std::lock_guard<std::mutex> lock(bridge_mutex_);
-                if (bridge_state_.load() == kBridgeCapturing) {
-                    const size_t channels = std::max(1, codec_->input_channels());
-                    BridgeAppendLocked(data.data(), data.size() / channels, channels);
-                }
                 continue;
             }
         }
@@ -414,8 +384,7 @@ void AudioService::OpusCodecTask() {
         audio_queue_cv_.wait(lock, [this]() {
             return service_stopped_.load() || !audio_encode_queue_.empty() ||
                    (!audio_decode_queue_.empty() &&
-                    audio_playback_queue_.size() < MAX_PLAYBACK_TASKS_IN_QUEUE) ||
-                   BridgeWantsEncodeLocked();
+                    audio_playback_queue_.size() < MAX_PLAYBACK_TASKS_IN_QUEUE);
         });
         if (service_stopped_.load()) {
             break;
@@ -552,15 +521,6 @@ void AudioService::OpusCodecTask() {
                          "Failed to encode audio: encoder not configured or invalid frame size "
                          "(got %u, expected %u)",
                          task.pcm.size(), encoder_frame_size_);
-            }
-            lock.lock();
-        }
-        /* Speech bridge: feed one stored frame at a time, faster than real time */
-        if (audio_encode_queue_.empty() && BridgeWantsEncodeLocked()) {
-            lock.unlock();
-            std::vector<int16_t> frame;
-            if (BridgePopFrame(frame)) {
-                PushTaskToEncodeQueue(kAudioTaskTypeEncodeToSendQueue, std::move(frame));
             }
             lock.lock();
         }
@@ -746,7 +706,6 @@ void AudioService::EnableWakeWordDetection(bool enable) {
                 esp_ae_rate_cvt_reset(input_resampler_);
             }
         }
-        BridgeStop();  // back to waiting for the wake word
         audio_engine_->EnableWakeWordDetection(true);
         xEventGroupSetBits(event_group_, AS_EVENT_WAKE_WORD_RUNNING);
     } else {
@@ -779,10 +738,8 @@ void AudioService::EnableVoiceProcessing(bool enable) {
             return;
         }
         ResetDecoder();
-        // With the speech bridge the microphone is already running: no warm-up
-        // pause, which would drop the words between the bridge and the live audio.
-        if (!BridgeBeginDrain()) {
-            audio_input_need_warmup_ = true;
+        audio_input_need_warmup_ = true;
+        {
             std::lock_guard<std::mutex> lock(input_resampler_mutex_);
             if (input_resampler_ != nullptr) {
                 esp_ae_rate_cvt_reset(input_resampler_);
@@ -791,7 +748,6 @@ void AudioService::EnableVoiceProcessing(bool enable) {
         audio_engine_->EnableVoiceProcessing(true);
         xEventGroupSetBits(event_group_, AS_EVENT_AUDIO_PROCESSOR_RUNNING);
     } else {
-        BridgeStop();
         if (audio_engine_initialized_) {
             audio_engine_->EnableVoiceProcessing(false);
         }
@@ -946,100 +902,4 @@ bool AudioService::InitializeAudioEngine() {
     audio_engine_initialized_ = true;
     audio_engine_->EnableDeviceAec(device_aec_enabled_);
     return true;
-}
-
-void AudioService::SetWakeWordThreshold(float threshold) {
-    if (audio_engine_ != nullptr) {
-        audio_engine_->SetWakeWordThreshold(threshold);
-    }
-}
-
-// ---------------------------------------------------------------- speech bridge
-// Runs in the AFE task right after a wake word detection.
-void AudioService::BridgeStart() {
-    if (!bridge_enabled_.load() || IsAudioProcessorRunning()) {
-        return;
-    }
-    std::lock_guard<std::mutex> lock(bridge_mutex_);
-    if (bridge_buffer_ == nullptr) {
-        bridge_buffer_ = static_cast<int16_t*>(
-            heap_caps_malloc(kBridgeMaxSamples * sizeof(int16_t), MALLOC_CAP_SPIRAM));
-        if (bridge_buffer_ == nullptr) {
-            ESP_LOGW(TAG, "Speech bridge disabled: no PSRAM for its buffer");
-            bridge_enabled_.store(false);
-            return;
-        }
-    }
-    bridge_head_ = 0;
-    bridge_size_ = 0;
-    bridge_state_.store(kBridgeCapturing);
-    xEventGroupSetBits(event_group_, AS_EVENT_BRIDGE_CAPTURING);
-}
-
-void AudioService::BridgeStop() {
-    xEventGroupClearBits(event_group_, AS_EVENT_BRIDGE_CAPTURING);
-    std::lock_guard<std::mutex> lock(bridge_mutex_);
-    bridge_state_.store(kBridgeOff);
-    bridge_head_ = 0;
-    bridge_size_ = 0;
-}
-
-// Listening starts: the recorded speech goes out first, then the live audio.
-bool AudioService::BridgeBeginDrain() {
-    xEventGroupClearBits(event_group_, AS_EVENT_BRIDGE_CAPTURING);
-    bool was_capturing = false;
-    {
-        std::lock_guard<std::mutex> lock(bridge_mutex_);
-        was_capturing = bridge_state_.load() == kBridgeCapturing;
-        // Whole Opus frames only, so the live frames that follow stay aligned.
-        const size_t frame = encoder_frame_size_ > 0 ? encoder_frame_size_ : 960;
-        const size_t partial = bridge_size_ % frame;
-        bridge_head_ = (bridge_head_ + partial) % kBridgeMaxSamples;
-        bridge_size_ -= partial;
-        if (was_capturing && bridge_size_ > 0) {
-            ESP_LOGI(TAG, "Speech bridge: sending %u ms said after the wake word",
-                     (unsigned)(bridge_size_ / 16));
-            bridge_state_.store(kBridgeDraining);
-        } else {
-            bridge_state_.store(kBridgeOff);
-        }
-    }
-    if (bridge_state_.load() == kBridgeDraining) {
-        { std::lock_guard<std::mutex> lock(audio_queue_mutex_); }
-        audio_queue_cv_.notify_all();
-    }
-    return was_capturing;
-}
-
-void AudioService::BridgeAppendLocked(const int16_t* data, size_t samples, size_t stride) {
-    for (size_t i = 0; i < samples && bridge_size_ < kBridgeMaxSamples; ++i) {
-        bridge_buffer_[(bridge_head_ + bridge_size_) % kBridgeMaxSamples] = data[i * stride];
-        ++bridge_size_;
-    }
-}
-
-bool AudioService::BridgePopFrame(std::vector<int16_t>& frame) {
-    std::lock_guard<std::mutex> lock(bridge_mutex_);
-    const size_t samples = encoder_frame_size_ > 0 ? encoder_frame_size_ : 960;
-    if (bridge_state_.load() != kBridgeDraining || bridge_size_ < samples) {
-        // Caught up with the live audio: from now on frames go straight to the encoder.
-        if (bridge_state_.load() == kBridgeDraining) {
-            bridge_state_.store(kBridgeOff);
-        }
-        return false;
-    }
-    frame.resize(samples);
-    for (size_t i = 0; i < samples; ++i) {
-        frame[i] = bridge_buffer_[(bridge_head_ + i) % kBridgeMaxSamples];
-    }
-    bridge_head_ = (bridge_head_ + samples) % kBridgeMaxSamples;
-    bridge_size_ -= samples;
-    return true;
-}
-
-// Called with audio_queue_mutex_ held. Leaves room in the send queue so the burst
-// does not push out packets the network task has not sent yet.
-bool AudioService::BridgeWantsEncodeLocked() const {
-    return bridge_state_.load() == kBridgeDraining && audio_encode_queue_.empty() &&
-           audio_send_queue_.size() + 10 < MAX_SEND_PACKETS_IN_QUEUE;
 }

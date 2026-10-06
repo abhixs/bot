@@ -128,7 +128,6 @@ private:
     // Blink
     uint32_t next_blink_ms_ = 2500;
     int32_t blink_elapsed_ms_ = -1;
-    int32_t blink_duration_ms_ = 160;
     bool double_blink_ = false;
 
     // Gaze (symbols move inside the sockets)
