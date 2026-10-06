@@ -4,6 +4,7 @@
 #include "assets/lang_config.h"
 #include "lvgl_font.h"
 #include "lvgl_theme.h"
+#include "settings.h"
 
 #include <esp_err.h>
 #include <esp_log.h>
@@ -49,6 +50,14 @@ RoboEyesDisplay::RoboEyesDisplay(esp_lcd_panel_io_handle_t panel_io, esp_lcd_pan
     dark_theme->set_emoji_font(emoji_font);
     LvglThemeManager::GetInstance().RegisterTheme("dark", dark_theme);
     current_theme_ = dark_theme;
+
+    // "light" only inverts the panel (see SetTheme); same fonts.
+    auto light_theme = new LvglTheme("light");
+    light_theme->set_text_font(text_font);
+    light_theme->set_icon_font(icon_font);
+    light_theme->set_large_icon_font(large_icon_font);
+    light_theme->set_emoji_font(emoji_font);
+    LvglThemeManager::GetInstance().RegisterTheme("light", light_theme);
 
     ESP_LOGI(TAG, "Initialize LVGL");
     lvgl_port_cfg_t port_cfg = ESP_LVGL_PORT_INIT_CONFIG();
@@ -196,6 +205,14 @@ void RoboEyesDisplay::SetupUI() {
     lv_obj_add_flag(dot_clock_->obj(), LV_OBJ_FLAG_HIDDEN);
 
     animation_timer_ = lv_timer_create(AnimationTimerCb, kFrameMs, this);
+
+    Settings settings("display", false);
+    clock_face_ = settings.GetString("face", "eyes") == "clock";
+    light_mode_ = settings.GetBool("light", false);
+    ApplyLightModeLocked();
+    if (light_mode_) {
+        if (auto theme = LvglThemeManager::GetInstance().GetTheme("light")) current_theme_ = theme;
+    }
 }
 
 void RoboEyesDisplay::AnimationTimerCb(lv_timer_t* timer) {
@@ -222,17 +239,19 @@ void RoboEyesDisplay::Animate(uint32_t elapsed_ms) {
         idle_ms_ = 0;  // a requested expression is not replaced by sleep
     }
 
-    // Clock mode ends when a new conversation starts (wake word / button).
-    if (clock_mode_) {
-        if (state == kDeviceStateIdle) {
-            clock_seen_idle_ = true;
-        } else if (clock_seen_idle_) {
-            clock_mode_ = false;
-        }
-    }
+    const bool setup_state = state == kDeviceStateStarting ||
+                             state == kDeviceStateWifiConfiguring ||
+                             state == kDeviceStateActivating ||
+                             state == kDeviceStateUpgrading ||
+                             state == kDeviceStateAudioTesting ||
+                             state == kDeviceStateFatalError;
     const int countdown_s = countdown_ ? countdown_() : -1;
     const bool show_countdown = countdown_s >= 0 && state == kDeviceStateIdle;
-    const bool show_dots = !alarm_active_ && (show_countdown || clock_mode_);
+    // Clock mode keeps the clock up even while talking; a running timer shows its
+    // countdown when idle. An alarm, a requested expression and setup screens use
+    // the eyes.
+    const bool show_dots = !alarm_active_ && !hold_active_ && !setup_state &&
+                           (show_countdown || clock_face_);
     if (show_dots) {
         UpdateDotFace(!show_countdown, countdown_s);
         idle_ms_ = 0;
@@ -258,12 +277,6 @@ void RoboEyesDisplay::Animate(uint32_t elapsed_ms) {
 
     // Text strip: only when there is something to read.
     if (status_bar_ != nullptr) {
-        const bool setup_state = state == kDeviceStateStarting ||
-                                 state == kDeviceStateWifiConfiguring ||
-                                 state == kDeviceStateActivating ||
-                                 state == kDeviceStateUpgrading ||
-                                 state == kDeviceStateAudioTesting ||
-                                 state == kDeviceStateFatalError;
         const bool notifying = notification_label_ != nullptr &&
                                !lv_obj_has_flag(notification_label_, LV_OBJ_FLAG_HIDDEN);
         const bool timed = static_cast<int32_t>(overlay_until_ms_ - lv_tick_get()) > 0;
@@ -319,8 +332,8 @@ void RoboEyesDisplay::UpdateDotFace(bool show_clock, int countdown_s) {
         snprintf(buf, sizeof(buf), "%02d", v % 100);
         return std::string(buf);
     };
-    const bool blink_on = (lv_tick_get() / 500) % 2 == 0;
     if (!show_clock) {
+        const bool blink_on = (lv_tick_get() / 500) % 2 == 0;
         // Timer / Pomodoro: minutes | seconds (hours | minutes from 100 min up).
         int minutes = countdown_s / 60;
         if (minutes >= 100) {
@@ -338,14 +351,9 @@ void RoboEyesDisplay::UpdateDotFace(bool show_clock, int countdown_s) {
     struct tm local;
     gmtime_r(&t, &local);  // the clock already holds local wall time
     const bool use_24h = use_24h_ ? use_24h_() : false;
-    std::string hours;
-    if (use_24h) {
-        hours = two(local.tm_hour);
-    } else {
-        int h12 = local.tm_hour % 12 == 0 ? 12 : local.tm_hour % 12;
-        hours = std::to_string(h12);
-    }
-    dot_clock_->Set(hours, two(local.tm_min), blink_on);
+    // Always two digits (09 00, not 9 00) and no colon between the groups.
+    const int hour = use_24h ? local.tm_hour : (local.tm_hour % 12 == 0 ? 12 : local.tm_hour % 12);
+    dot_clock_->Set(two(hour), two(local.tm_min), false);
 }
 
 bool RoboEyesDisplay::HoldExpression(const std::string& name, int seconds) {
@@ -357,17 +365,44 @@ bool RoboEyesDisplay::HoldExpression(const std::string& name, int seconds) {
     hold_mood_ = mood;
     hold_active_ = true;
     hold_until_ms_ = lv_tick_get() + static_cast<uint32_t>(std::max(1, seconds)) * 1000;
-    clock_mode_ = false;
     idle_ms_ = 0;
     if (eyes_ != nullptr) eyes_->SetMood(mood);
     return true;
 }
 
-void RoboEyesDisplay::ShowClock() {
-    DisplayLockGuard lock(this);
-    clock_mode_ = true;
-    clock_seen_idle_ = Application::GetInstance().GetDeviceState() == kDeviceStateIdle;
-    hold_active_ = false;
+void RoboEyesDisplay::SetFaceMode(FaceMode mode) {
+    const bool clock = mode == FaceMode::Clock;
+    {
+        DisplayLockGuard lock(this);
+        clock_face_ = clock;
+        hold_active_ = false;
+        idle_ms_ = 0;
+    }
+    Settings settings("display", true);
+    settings.SetString("face", clock ? "clock" : "eyes");
+}
+
+void RoboEyesDisplay::SetLightMode(bool light) {
+    {
+        DisplayLockGuard lock(this);
+        light_mode_ = light;
+        ApplyLightModeLocked();
+        auto theme = LvglThemeManager::GetInstance().GetTheme(light ? "light" : "dark");
+        if (theme != nullptr) current_theme_ = theme;
+    }
+    Settings settings("display", true);
+    settings.SetBool("light", light);
+}
+
+// SSD1306 and SH1106 share the "inverse display" command (0xA7, normal: 0xA6). Sent
+// with the LVGL lock held, so it never lands in the middle of a frame transfer.
+void RoboEyesDisplay::ApplyLightModeLocked() {
+    if (panel_io_ == nullptr) return;
+    esp_err_t err = esp_lcd_panel_io_tx_param(panel_io_, light_mode_ ? 0xA7 : 0xA6, nullptr, 0);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to set %s mode: %s", light_mode_ ? "light" : "dark",
+                 esp_err_to_name(err));
+    }
 }
 
 void RoboEyesDisplay::SetStatus(const char* status) {
@@ -383,10 +418,6 @@ void RoboEyesDisplay::SetStatus(const char* status) {
 void RoboEyesDisplay::SetChatMessage(const char* role, const char* content) {
     if (role != nullptr && strcmp(role, "user") == 0) {
         if (content == nullptr || content[0] == '\0') return;
-        {
-            DisplayLockGuard lock(this);
-            clock_mode_ = false;  // talking again brings the eyes back
-        }
         if (on_user_speech_) on_user_speech_(content);
         return;
     }
@@ -433,10 +464,16 @@ void RoboEyesDisplay::SetEmotion(const char* emotion) {
     }
 }
 
+// The common "self.screen.set_theme" tool lands here: light / dark mode.
 void RoboEyesDisplay::SetTheme(Theme* theme) {
-    DisplayLockGuard lock(this);
-    auto lvgl_theme = static_cast<LvglTheme*>(theme);
-    lv_obj_set_style_text_font(lv_screen_active(), lvgl_theme->text_font()->font(), 0);
+    if (theme == nullptr) return;
+    {
+        DisplayLockGuard lock(this);
+        current_theme_ = theme;
+        auto lvgl_theme = static_cast<LvglTheme*>(theme);
+        lv_obj_set_style_text_font(lv_screen_active(), lvgl_theme->text_font()->font(), 0);
+    }
+    SetLightMode(theme->name() == "light");
 }
 
 void RoboEyesDisplay::SetPowerSaveMode(bool on) {

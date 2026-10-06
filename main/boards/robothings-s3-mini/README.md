@@ -7,8 +7,8 @@ with a new board `robothings-s3-mini`.
 ## What is new
 
 - **Animated robot eyes** on the 128x64 OLED: blink, look around when idle, grow
-  attentive while listening, bounce while speaking, scan while connecting, fall asleep
-  (Zzz) after 2 minutes idle. Each AI emotion has its own face: happy, laughing, sad,
+  attentive while listening, pulse while speaking, scan while connecting, and drift
+  calmly in standby. Each AI emotion has its own face: happy, laughing, sad,
   crying, angry, surprised, love (heart eyes), thinking, confused, wink, cool.
 - **Voice alarms and timers** (device-side MCP tools `self.alarm.*`):
   set once / daily / weekdays / weekends / chosen days, list, cancel, snooze, optional
@@ -33,16 +33,35 @@ workflow manually (Actions -> Build RoboThings firmware -> Run workflow).
 
 ## Voice shortcuts and screen
 
-- **"Bye", "Bye bye", "Chup raho", "Chup raho ab", "So jao"**: the device stops at once
-  and goes to standby without answering (handled on the device).
-- **"Show clock" / "Clock dikhao"**: the eyes give way to a dot-matrix clock (hours in
-  the left eye, minutes in the right) until you talk again.
+- **"Bye", "Bye bye", "Chup raho", "Chup raho ab"**: the device stops at once and goes
+  to standby without a word: the speaker is muted the moment the words are recognised.
+- **"So jao"**: the same, showing the sleeping eyes for a few seconds.
+- **Two screen modes**, remembered after a restart:
+  - **Clock mode**: "Show time", "Show clock", "Clock mode", "Clock dikhao". A big
+    dot-matrix clock (hours in the left eye, minutes in the right, always two digits,
+    e.g. `09 00`), also while talking.
+  - **Face mode**: "Show face", "Show face animations", "Face mode". The animated eyes
+    and emotions.
+  - **"Change the mode"** switches to the other one.
+- **"Light mode" / "Dark mode"**: light mode inverts the screen (dark is the default),
+  remembered after a restart.
 - **"Time format 12 hours / 24 hours pe kar do"**: switches the clock format.
 - **"Pomodoro timer lagao" / "10 minute ka timer"**: while a timer runs and the device
-  is idle, the screen counts down minutes | seconds in the same dot font.
+  is idle, the screen counts down minutes : seconds in the same dot font.
 - **"Roo ke dikhao", "Gussa dikhao", "Dil wali aankhein dikhao"...**: shows that
   expression (crying, angry, in love, ...) for a few seconds.
-- Standby shows the sleeping eyes.
+- Standby (face mode) shows the big square "surprised" eyes drifting slowly inside the
+  eye circles, with slow, relaxed blinks.
+
+## Speech and alarms
+
+- **Words said right after "Alexa" are kept**: the microphone keeps recording while the
+  connection opens and sends that speech first, so "Alexa, roo ke dikhao" in one breath
+  reaches the server complete.
+- **Stopping an alarm or timer by voice**: the beep plays for about 1 s every 3.5 s and
+  the wake word is extra sensitive while it rings. Say "Alexa" in a gap between beeps
+  (or press any button).
+- Speech-to-text runs on the server. Speaking clearly within about 1 m of the mic helps.
 
 ## Change the wake word by voice
 

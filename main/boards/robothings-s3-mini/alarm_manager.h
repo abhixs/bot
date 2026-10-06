@@ -77,6 +77,8 @@ private:
     esp_timer_handle_t ring_timer_ = nullptr;
     bool ringing_ = false;
     int ring_elapsed_ms_ = 0;
+    int next_tone_ms_ = 0;    // only touched on the main task
+    int next_toggle_ms_ = 0;  // only touched on the main task
     bool idle_seen_while_ringing_ = false;  // only touched on the main task
     RingInfo current_ring_;
     std::function<void(const RingInfo&)> on_ring_start_;
