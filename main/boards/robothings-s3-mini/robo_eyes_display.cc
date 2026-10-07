@@ -253,6 +253,7 @@ void RoboEyesDisplay::SetMainMode(MainDisplayMode mode) {
         DisplayLockGuard lock(this);
         main_mode_ = mode;
         countdown_selected_ = false;
+        stopwatch_selected_ = false;
         hold_active_ = false;  // show the chosen mode right away
         idle_ms_ = 0;
     }
@@ -267,9 +268,46 @@ bool RoboEyesDisplay::ShowCountdown() {
     }
     DisplayLockGuard lock(this);
     countdown_selected_ = true;
+    stopwatch_selected_ = false;
     hold_active_ = false;
     ESP_LOGI(TAG, "Showing the countdown");
     return true;
+}
+
+void RoboEyesDisplay::ClearCountdown() {
+    DisplayLockGuard lock(this);
+    countdown_selected_ = false;
+}
+
+bool RoboEyesDisplay::ShowStopwatch() {
+    if (!stopwatch_ || stopwatch_() < 0) {
+        return false;  // no stopwatch on
+    }
+    DisplayLockGuard lock(this);
+    stopwatch_selected_ = true;
+    countdown_selected_ = false;
+    hold_active_ = false;
+    ESP_LOGI(TAG, "Showing the stopwatch");
+    return true;
+}
+
+// Stopwatch: minutes : seconds (hours : minutes from 100 minutes on). The colon is
+// steady while it runs and blinks while it is paused.
+void RoboEyesDisplay::UpdateStopwatchFace(int elapsed_s) {
+    if (dot_clock_ == nullptr) return;
+    auto two = [](int v) {
+        char buf[4];
+        snprintf(buf, sizeof(buf), "%02d", v % 100);
+        return std::string(buf);
+    };
+    const bool running = stopwatch_running_ ? stopwatch_running_() : true;
+    const bool colon = running || (lv_tick_get() / 500) % 2 == 0;
+    const int minutes = elapsed_s / 60;
+    if (minutes >= 100) {
+        dot_clock_->Set(two(minutes / 60), two(minutes % 60), colon);
+    } else {
+        dot_clock_->Set(two(minutes), two(elapsed_s % 60), colon);
+    }
 }
 
 void RoboEyesDisplay::SetDisplayTheme(DisplayTheme theme) {
@@ -286,11 +324,13 @@ void RoboEyesDisplay::SetDisplayTheme(DisplayTheme theme) {
 // Priority: setup screens, a ringing alarm, a requested expression, the countdown
 // (when chosen, while a timer runs), then the main mode. Only the user (or a new
 // short timer) changes which one is chosen.
-DisplayScreen RoboEyesDisplay::ResolveScreen(DeviceState state, int countdown_s) const {
+DisplayScreen RoboEyesDisplay::ResolveScreen(DeviceState state, int countdown_s,
+                                             int stopwatch_s) const {
     if (IsSetupState(state)) return DisplayScreen::Setup;
     if (alarm_active_) return DisplayScreen::Alarm;
     if (hold_active_) return DisplayScreen::Expression;
     if (countdown_selected_ && countdown_s >= 0) return DisplayScreen::Countdown;
+    if (stopwatch_selected_ && stopwatch_s >= 0) return DisplayScreen::Stopwatch;
     return main_mode_ == MainDisplayMode::Time ? DisplayScreen::Clock : DisplayScreen::Eyes;
 }
 
@@ -300,8 +340,12 @@ void RoboEyesDisplay::ShowScreen(DisplayScreen screen) {
         screen_ = screen;
         return;
     }
-    const bool dots = screen == DisplayScreen::Clock || screen == DisplayScreen::Countdown;
-    const bool had_dots = screen_ == DisplayScreen::Clock || screen_ == DisplayScreen::Countdown;
+    auto is_dots = [](DisplayScreen s) {
+        return s == DisplayScreen::Clock || s == DisplayScreen::Countdown ||
+               s == DisplayScreen::Stopwatch;
+    };
+    const bool dots = is_dots(screen);
+    const bool had_dots = is_dots(screen_);
     screen_ = screen;
     if (dots == had_dots) return;
     if (dots) {
@@ -339,7 +383,11 @@ void RoboEyesDisplay::Animate(uint32_t elapsed_ms) {
     if (countdown_s < 0) {
         countdown_selected_ = false;  // no timer left: back to the main mode for good
     }
-    const DisplayScreen screen = ResolveScreen(state, countdown_s);
+    const int stopwatch_s = stopwatch_ ? stopwatch_() : -1;
+    if (stopwatch_s < 0) {
+        stopwatch_selected_ = false;  // stopwatch ended: back to the main mode
+    }
+    const DisplayScreen screen = ResolveScreen(state, countdown_s, stopwatch_s);
     ShowScreen(screen);
 
     // No text on the screen, ever: the status strip stays hidden (only the clock and
@@ -352,6 +400,11 @@ void RoboEyesDisplay::Animate(uint32_t elapsed_ms) {
         UpdateDotFace(screen == DisplayScreen::Clock, countdown_s);
         idle_ms_ = 0;
         return;  // the eyes are hidden: no need to animate them
+    }
+    if (screen == DisplayScreen::Stopwatch) {
+        UpdateStopwatchFace(stopwatch_s);
+        idle_ms_ = 0;
+        return;
     }
 
     // Eyes: standby (idle for a moment) shows the relaxed standby eyes.

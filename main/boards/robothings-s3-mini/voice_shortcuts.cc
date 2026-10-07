@@ -12,7 +12,7 @@ namespace {
 using Words = std::initializer_list<const char*>;
 
 // Longer sentences are questions or requests for the AI, not device commands.
-constexpr size_t kMaxShortcutWords = 9;
+constexpr size_t kMaxShortcutWords = 10;
 
 // Goodbye words, and the filler that may come with them ("ok bye alexa").
 constexpr Words kByeWords = {"bye", "byebye", "goodbye", "tata", "alvida", "बाय", "बाई",
@@ -94,6 +94,7 @@ public:
     }
 
     size_t size() const { return words_.size(); }
+    const std::vector<std::string>& words() const { return words_; }
     const std::string& text() const { return text_; }
 
     bool Has(Words set) const {
@@ -156,6 +157,63 @@ VoiceShortcut ParseTheme(const Sentence& s) {
     return VoiceShortcut::None;
 }
 
+// ---------------------------------------------------------------- timers
+constexpr Words kSetWords = {"set", "start", "laga", "lagao", "lagado", "lagaao", "chalu", "shuru",
+                             "begin", "chalao", "लगाओ", "लगा", "शुरू", "चालू", "स्टार्ट"};
+constexpr Words kStopWords = {"stop", "end", "band", "khatam", "finish", "cancel", "off", "ruko",
+                              "dismiss", "enough", "bas", "बंद", "स्टॉप", "रुको", "बस", "खत्म"};
+// "stop" may come with these words and still mean "stop the ringing alarm".
+constexpr Words kStopFiller = {"it", "the", "alarm", "karo", "kar", "do", "ok", "okay", "please",
+                               "now", "ab", "turn", "that", "this", "ringing", "sound", "beep",
+                               "करो", "कर", "दो", "अलार्म", "अब", "ओके"};
+constexpr Words kPauseWords = {"pause", "hold", "roko", "rok", "रोको", "पॉज़", "पॉज"};
+constexpr Words kResumeWords = {"resume", "continue", "unpause", "wapas", "dobara", "फिर",
+                                "रिज्यूम"};
+constexpr Words kResetWords = {"reset"};
+constexpr Words kExtendWords = {"extend", "extension", "more", "aur", "badhao", "badha", "badhado",
+                                "add", "snooze", "बढ़ाओ", "बढ़ा", "और", "एक्सटेंड"};
+constexpr Words kPomodoroWords = {"pomodoro", "pomodoros", "पोमोडोरो"};
+constexpr Words kStopwatchWords = {"stopwatch", "स्टॉपवॉच"};
+constexpr Words kCountdownTimerWords = {"timer", "countdown", "टाइमर", "काउंटडाउन"};
+constexpr Words kNotTimerWords = {"alarm", "alarms", "remind", "reminder", "yaad", "baje",
+                                  "अलार्म", "बजे", "याद"};
+
+struct NumberWord {
+    const char* word;
+    int value;
+};
+constexpr NumberWord kNumberWords[] = {
+    {"one", 1}, {"two", 2}, {"three", 3}, {"four", 4}, {"five", 5}, {"six", 6}, {"seven", 7},
+    {"eight", 8}, {"nine", 9}, {"ten", 10}, {"eleven", 11}, {"twelve", 12}, {"thirteen", 13},
+    {"fourteen", 14}, {"fifteen", 15}, {"sixteen", 16}, {"seventeen", 17}, {"eighteen", 18},
+    {"nineteen", 19}, {"twenty", 20}, {"thirty", 30}, {"forty", 40}, {"fifty", 50},
+    {"sixty", 60}, {"a", 1}, {"an", 1},
+    {"ek", 1}, {"do", 2}, {"teen", 3}, {"char", 4}, {"chaar", 4}, {"paanch", 5}, {"panch", 5},
+    {"chhe", 6}, {"saat", 7}, {"aath", 8}, {"nau", 9}, {"das", 10}, {"barah", 12},
+    {"pandrah", 15}, {"bees", 20}, {"pachees", 25}, {"pachis", 25}, {"pachchis", 25},
+    {"tees", 30}, {"chalis", 40}, {"pachas", 50},
+    {"एक", 1}, {"दो", 2}, {"तीन", 3}, {"चार", 4}, {"पांच", 5}, {"पाँच", 5}, {"छह", 6},
+    {"सात", 7}, {"आठ", 8}, {"नौ", 9}, {"दस", 10}, {"पंद्रह", 15}, {"बीस", 20},
+    {"पच्चीस", 25}, {"तीस", 30}, {"चालीस", 40}, {"पचास", 50}, {"साठ", 60},
+};
+
+int NumberValue(const std::string& w) {
+    if (!w.empty() && std::all_of(w.begin(), w.end(), [](unsigned char c) { return isdigit(c); })) {
+        return w.size() <= 4 ? std::stoi(w) : -1;
+    }
+    for (const auto& n : kNumberWords) {
+        if (w == n.word) return n.value;
+    }
+    return -1;
+}
+
+int UnitSeconds(const std::string& w) {
+    if (In(w, {"minute", "minutes", "min", "mins", "minat", "minut", "मिनट"})) return 60;
+    if (In(w, {"second", "seconds", "sec", "secs", "सेकंड", "सेकेंड"})) return 1;
+    if (In(w, {"hour", "hours", "hr", "hrs", "ghanta", "ghante", "घंटा", "घंटे"})) return 3600;
+    return 0;
+}
+
 bool HasDigit(const std::string& text) {
     return std::any_of(text.begin(), text.end(), [](unsigned char c) { return isdigit(c); });
 }
@@ -183,7 +241,108 @@ VoiceShortcut ParseMode(const Sentence& s) {
     return VoiceShortcut::None;
 }
 
+int DurationOf(const Sentence& s) {
+    const auto& w = s.words();
+    int total = 0;
+    for (size_t i = 0; i < w.size(); ++i) {
+        // "half an hour" / "aadha ghanta"
+        if ((w[i] == "half" || w[i] == "aadha" || w[i] == "आधा") && i + 1 < w.size()) {
+            size_t j = i + 1;
+            if (j < w.size() && (w[j] == "an" || w[j] == "a")) ++j;
+            if (j < w.size() && UnitSeconds(w[j]) == 3600) {
+                total += 1800;
+                i = j;
+                continue;
+            }
+        }
+        int value = NumberValue(w[i]);
+        if (value < 0) {
+            // "10min", "25mins"
+            size_t k = 0;
+            while (k < w[i].size() && isdigit(static_cast<unsigned char>(w[i][k]))) ++k;
+            if (k > 0 && k < w[i].size() && k <= 4) {
+                const int unit = UnitSeconds(w[i].substr(k));
+                if (unit > 0) total += std::stoi(w[i].substr(0, k)) * unit;
+            }
+            continue;
+        }
+        // "twenty five minutes"
+        size_t next = i + 1;
+        if (value >= 20 && value % 10 == 0 && next < w.size()) {
+            const int ones = NumberValue(w[next]);
+            if (ones > 0 && ones < 10) {
+                value += ones;
+                ++next;
+            }
+        }
+        // "ten more minutes", "10 aur minute"
+        if (next + 1 < w.size() && In(w[next], {"more", "aur", "और", "extra"}) &&
+            UnitSeconds(w[next + 1]) > 0) {
+            ++next;
+        }
+        if (next < w.size()) {
+            const int unit = UnitSeconds(w[next]);
+            if (unit > 0) {
+                total += value * unit;
+                i = next;
+            }
+        }
+    }
+    return total;
+}
+
+VoiceCommand ParseStopwatch(const Sentence& s) {
+    if (s.Has(kPauseWords)) return {VoiceShortcut::StopwatchPause};
+    if (s.Has(kResumeWords)) return {VoiceShortcut::StopwatchResume};
+    if (s.Has(kStopWords) || s.Has(kResetWords)) return {VoiceShortcut::StopwatchStop};
+    if (s.Has(kShowWords) && !s.Has(kSetWords)) return {VoiceShortcut::StopwatchShow};
+    return {VoiceShortcut::StopwatchStart};  // "start stopwatch", "stopwatch chalao", "stopwatch"
+}
+
+VoiceCommand ParsePomodoro(const Sentence& s) {
+    if (s.Has(kStopWords)) return {VoiceShortcut::PomodoroStop};
+    if (s.Has(kExtendWords)) return {VoiceShortcut::Extend, DurationOf(s)};
+    if (s.Has(kShowWords) && !s.Has(kSetWords)) return {VoiceShortcut::TimerMode};
+    return {VoiceShortcut::PomodoroStart, DurationOf(s)};  // "set pomodoro timer"
+}
+
+VoiceCommand ParseTimers(const Sentence& s) {
+    if (s.Has(kQuestionWords) || s.Has({"how", "much", "left", "baki", "bacha", "remaining"})) {
+        return {};  // "how much time is left" is a question for the AI
+    }
+    const int seconds = DurationOf(s);
+    const bool timer_word = s.Has(kCountdownTimerWords);
+    if (s.Has(kExtendWords) && (seconds > 0 || s.Has({"extend", "extension", "एक्सटेंड"}))) {
+        return {VoiceShortcut::Extend, seconds};
+    }
+    if (timer_word && seconds > 0 && !s.Has(kNotTimerWords) && !s.Has(kStopWords)) {
+        return {VoiceShortcut::TimerSet, seconds};
+    }
+    if (timer_word && !s.Has(kNotTimerWords) && seconds == 0 && !HasDigit(s.text())) {
+        // "start the timer" (nothing to count down from) = stopwatch; "stop the timer"
+        if (s.Has(kStopWords)) return {VoiceShortcut::StopTimer};
+        if (s.Has(kSetWords) && !s.Has(kShowWords)) return {VoiceShortcut::StopwatchStart};
+        if (s.Has(kPauseWords)) return {VoiceShortcut::StopwatchPause};
+        if (s.Has(kResumeWords)) return {VoiceShortcut::StopwatchResume};
+    }
+    // "stop", "stop it", "alarm band karo", "bas"
+    if (s.size() <= 5 && s.Has(kStopWords) && s.OnlyFrom(kStopWords, kStopFiller)) {
+        return {VoiceShortcut::StopAlarm};
+    }
+    if (s.size() <= 2 && s.OnlyFrom(kPauseWords, {"it", "please"})) {
+        return {VoiceShortcut::StopwatchPause};
+    }
+    if (s.size() <= 2 && s.OnlyFrom(kResumeWords, {"it", "please"})) {
+        return {VoiceShortcut::StopwatchResume};
+    }
+    return {};
+}
+
 }  // namespace
+
+int ParseDuration(const std::string& normalized_text) {
+    return DurationOf(Sentence(normalized_text));
+}
 
 std::string NormalizeSpeech(const std::string& text) {
     std::string out;
@@ -228,13 +387,23 @@ std::string NormalizeSpeech(const std::string& text) {
     return out;
 }
 
-VoiceShortcut ParseVoiceShortcut(const std::string& raw) {
-    const Sentence s(NormalizeSpeech(raw));
-    if (s.size() == 0 || s.size() > kMaxShortcutWords) return VoiceShortcut::None;
-    if (auto r = ParseStandby(s); r != VoiceShortcut::None) return r;
-    if (auto r = ParseTheme(s); r != VoiceShortcut::None) return r;
-    return ParseMode(s);
+VoiceCommand ParseVoiceCommand(const std::string& raw) {
+    std::string text = NormalizeSpeech(raw);
+    // "stop watch" -> "stopwatch"
+    for (size_t pos; (pos = (" " + text + " ").find(" stop watch ")) != std::string::npos;) {
+        text.replace(pos, 10, "stopwatch");
+    }
+    const Sentence s(text);
+    if (s.size() == 0 || s.size() > kMaxShortcutWords) return {};
+    if (auto r = ParseStandby(s); r != VoiceShortcut::None) return {r};
+    if (auto r = ParseTheme(s); r != VoiceShortcut::None) return {r};
+    if (s.Has(kStopwatchWords)) return ParseStopwatch(s);
+    if (s.Has(kPomodoroWords)) return ParsePomodoro(s);
+    if (auto r = ParseTimers(s); r.type != VoiceShortcut::None) return r;
+    return {ParseMode(s)};
 }
+
+VoiceShortcut ParseVoiceShortcut(const std::string& raw) { return ParseVoiceCommand(raw).type; }
 
 const char* VoiceShortcutName(VoiceShortcut shortcut) {
     switch (shortcut) {
@@ -250,6 +419,28 @@ const char* VoiceShortcutName(VoiceShortcut shortcut) {
             return "toggle mode";
         case VoiceShortcut::TimerMode:
             return "timer mode";
+        case VoiceShortcut::TimerSet:
+            return "set timer";
+        case VoiceShortcut::Extend:
+            return "extend";
+        case VoiceShortcut::StopAlarm:
+            return "stop alarm";
+        case VoiceShortcut::StopTimer:
+            return "stop timer";
+        case VoiceShortcut::PomodoroStart:
+            return "pomodoro start";
+        case VoiceShortcut::PomodoroStop:
+            return "pomodoro stop";
+        case VoiceShortcut::StopwatchStart:
+            return "stopwatch start";
+        case VoiceShortcut::StopwatchPause:
+            return "stopwatch pause";
+        case VoiceShortcut::StopwatchResume:
+            return "stopwatch resume";
+        case VoiceShortcut::StopwatchStop:
+            return "stopwatch stop";
+        case VoiceShortcut::StopwatchShow:
+            return "stopwatch show";
         case VoiceShortcut::LightTheme:
             return "light theme";
         case VoiceShortcut::DarkTheme:

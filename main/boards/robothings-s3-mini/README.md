@@ -53,6 +53,24 @@ Commands are recognised from their key words, so natural variations work.
 - **"Time format 12 hours / 24 hours pe kar do"**: switches the clock format (saved).
 - **"Roo ke dikhao", "Gussa dikhao", "Dil wali aankhein dikhao"...**: shows that
   expression (crying, angry, in love, ...) for a few seconds.
+- **Timers, Pomodoro and stopwatch are handled on the device** (no waiting for the AI):
+  - "Set a timer for 10 minutes", "10 minute ka timer lagao": starts at once.
+  - "Extend 10 minutes", "10 minute aur": more time (after a ring: a new timer of that
+    length; while a timer runs: added to it).
+  - "Stop" / "alarm band karo": stops the ringing alarm (also right after "Alexa"
+    silenced it).
+  - **Pomodoro**: "set Pomodoro timer" starts 25 min focus -> 5 min break -> 25 min
+    focus ... When a focus ends: "extend 10 minutes" (focus extension) or "stop" / no
+    answer (the break starts). When a break ends the next focus starts by itself.
+    "Stop Pomodoro" ends the session. The countdown is the screen while it runs
+    (switch away with "show time" / "show face", back with "show timer"). The session
+    survives a restart.
+  - **Stopwatch** (counts up, MM:SS): "start stopwatch" (or "start the timer"),
+    "pause stopwatch", "resume stopwatch", "stop / end stopwatch" (or "stop the
+    timer"), "show stopwatch". The colon blinks while it is paused.
+- **Alarms stop by themselves after 20 seconds.**
+- **Wake sound at once**: the popup plays the moment "Alexa" is detected, before the
+  server connection opens.
 - **"Show timer" / "show countdown" / "timer dikhao"**: shows the countdown of the
   shortest running timer, also while talking, until another mode is chosen. A timer
   under 31 minutes (e.g. "set a timer for 10 minutes", a Pomodoro) switches to its

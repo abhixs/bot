@@ -28,6 +28,7 @@ enum class DisplayScreen {
     Eyes,        // main mode Emotion
     Clock,       // main mode Time
     Countdown,   // the shortest running timer / Pomodoro, when chosen
+    Stopwatch,   // the stopwatch, when chosen
     Alarm,       // an alarm or timer is ringing
     Expression,  // an expression the user asked for ("roo ke dikhao"), for a few seconds
     Setup,       // starting, Wi-Fi setup, activation, upgrade, errors
@@ -71,6 +72,11 @@ public:
     // Returns false when no timer runs.
     bool ShowCountdown();
     bool countdown_selected() const { return countdown_selected_; }
+    // Shows the stopwatch (MM:SS, counting up) the same way. Returns false when no
+    // stopwatch is on.
+    bool ShowStopwatch();
+    // Back to the main mode if the countdown was on screen (e.g. Pomodoro ended).
+    void ClearCountdown();
     void SetDisplayTheme(DisplayTheme theme);
     DisplayTheme display_theme() const { return theme_; }
 
@@ -82,6 +88,11 @@ public:
     void SetCountdownProvider(std::function<int()> provider) { countdown_ = std::move(provider); }
     // Returns true if the clock should use 24-hour format.
     void SetClockFormatProvider(std::function<bool()> provider) { use_24h_ = std::move(provider); }
+    // Stopwatch: elapsed seconds (-1 = off) and whether it is running.
+    void SetStopwatchProvider(std::function<int()> elapsed, std::function<bool()> running) {
+        stopwatch_ = std::move(elapsed);
+        stopwatch_running_ = std::move(running);
+    }
 
 private:
     bool Lock(int timeout_ms = 0) override;
@@ -124,11 +135,15 @@ private:
     void ApplyThemeLocked();
 
     bool countdown_selected_ = false;
+    bool stopwatch_selected_ = false;
+    std::function<int()> stopwatch_;
+    std::function<bool()> stopwatch_running_;
+    void UpdateStopwatchFace(int elapsed_s);
     DisplayScreen screen_ = DisplayScreen::Eyes;
     uint32_t state_since_ms_ = 0;  // when the device state last changed (lv_tick)
     // How long a listening turn first shows the "ready" (Sweet) face.
     static constexpr uint32_t kWakeFaceMs = 900;
-    DisplayScreen ResolveScreen(DeviceState state, int countdown_s) const;
+    DisplayScreen ResolveScreen(DeviceState state, int countdown_s, int stopwatch_s) const;
     void ShowScreen(DisplayScreen screen);
 
     std::function<void(const std::string&)> on_user_speech_;

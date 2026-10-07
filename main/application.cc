@@ -904,9 +904,11 @@ void Application::HandleWakeWordDetectedEvent() {
     ESP_LOGI(TAG, "Wake word detected: %s (state: %d)", wake_word.c_str(), (int)state);
 
     if (state == kDeviceStateIdle) {
+        PlayWakeSoundNow();
         BeginWakeWordInvoke(wake_word);
     } else if (state == kDeviceStateNotifying) {
         StopNotification();
+        PlayWakeSoundNow();
         BeginWakeWordInvoke(wake_word);
     } else if (state == kDeviceStateSpeaking || state == kDeviceStateListening) {
         AbortSpeaking(kAbortReasonWakeWordDetected);
@@ -920,6 +922,10 @@ void Application::HandleWakeWordDetectedEvent() {
             audio_service_.PlaySound(Lang::Sounds::OGG_POPUP);
             // Re-enable wake word detection as it was stopped by the detection itself
             audio_service_.EnableWakeWordDetection(true);
+        } else if (wake_sound_on_detect_) {
+            audio_service_.ResetDecoder();  // drop the rest of the reply
+            PlayWakeSoundNow();
+            SetListeningMode(GetDefaultListeningMode());
         } else {
             // Play popup sound and start listening again
             play_popup_on_listening_ = true;
@@ -986,10 +992,23 @@ void Application::ContinueWakeWordInvoke(const std::string& wake_word) {
     SetListeningMode(GetDefaultListeningMode());
 #else
     // Set flag to play popup sound after state changes to listening
-    // (PlaySound here would be cleared by ResetDecoder in EnableVoiceProcessing)
-    play_popup_on_listening_ = true;
+    // (PlaySound here would be cleared by ResetDecoder in EnableVoiceProcessing),
+    // unless it was already played when the wake word was detected.
+    play_popup_on_listening_ = !wake_sound_on_detect_;
     SetListeningMode(GetDefaultListeningMode());
 #endif
+}
+
+// With wake_sound_on_detect_ the popup plays at once, before the (network
+// dependent) audio channel opens. In auto-stop listening mode the listening start
+// waits for the playback to drain (pending_listening_start_), so the sound is not
+// cut by the decoder reset when voice processing starts.
+void Application::PlayWakeSoundNow() {
+    if (!wake_sound_on_detect_) {
+        return;
+    }
+    audio_service_.ResetDecoder();  // nothing older (alarm beep, music) in front of it
+    audio_service_.PlaySound(Lang::Sounds::OGG_POPUP);
 }
 
 void Application::HandleStateChangedEvent() {

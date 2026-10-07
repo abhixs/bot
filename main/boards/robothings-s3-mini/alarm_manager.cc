@@ -247,8 +247,8 @@ void AlarmManager::RegisterTools() {
     mcp.AddTool(
         "self.alarm.set_timer",
         "Start a countdown timer on the device, e.g. 'set a 10 minute timer', 'remind me in "
-        "30 seconds' or a Pomodoro ('pomodoro timer' = 25 minute focus, label 'Focus'; a break "
-        "is 5 minutes, label 'Break'). Give the duration as minutes and/or seconds. A timer under "
+        "30 seconds'. (For a Pomodoro use self.pomodoro.start; for counting up use "
+        "self.stopwatch.control.) Give the duration as minutes and/or seconds. A timer under "
         "31 minutes shows its countdown on the screen at once.",
         PropertyList({
             Property("minutes", kPropertyTypeInteger, 0, 0, 1440),
@@ -264,6 +264,11 @@ void AlarmManager::RegisterTools() {
             int total = properties["minutes"].value<int>() * 60 + properties["seconds"].value<int>();
             if (total < 5) {
                 return std::unexpected(std::string("Timer must be at least 5 seconds."));
+            }
+            if (total == last_added_seconds_ && esp_timer_get_time() - last_added_us_ < 15000000LL &&
+                HasTimer(last_added_id_)) {
+                // Already set on the device from the same request.
+                return std::string("{\"success\":true,\"note\":\"timer already running\"}");
             }
             Alarm alarm;
             alarm.is_timer = true;
@@ -377,6 +382,8 @@ void AlarmManager::CheckAlarms() {
                                           : TwoDigitTime(it->hour, it->minute);
                 ring.label = it->label;
                 ring.lamp = it->lamp;
+                ring.id = it->id;
+                ring.is_timer = it->is_timer;
             } else if (!on_time) {
                 ESP_LOGW(TAG, "Alarm %d missed (device was off or clock jumped)", it->id);
             }
@@ -465,6 +472,7 @@ void AlarmManager::StopRinging(int snooze_minutes) {
         return;
     }
     ringing_ = false;
+    last_ring_stop_us_ = esp_timer_get_time();
     esp_timer_stop(ring_timer_);
     if (snooze_minutes > 0) {
         time_t now = time(nullptr);
@@ -482,4 +490,65 @@ void AlarmManager::StopRinging(int snooze_minutes) {
     if (on_ring_stop_) {
         on_ring_stop_();
     }
+}
+
+int AlarmManager::AddTimer(int seconds, const std::string& label) {
+    time_t now = time(nullptr);
+    if (!alarm_schedule::IsTimeValid(now) || seconds < 1) {
+        return -1;
+    }
+    Alarm alarm;
+    alarm.is_timer = true;
+    alarm.fire_at = static_cast<int64_t>(now) + seconds;
+    alarm.label = label;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (static_cast<int>(alarms_.size()) >= kMaxAlarms) {
+            return -1;
+        }
+        alarm.id = NextIdLocked();
+        alarms_.push_back(alarm);
+        SaveLocked();
+    }
+    last_added_us_ = esp_timer_get_time();
+    last_added_seconds_ = seconds;
+    last_added_id_ = alarm.id;
+    ESP_LOGI(TAG, "Timer %d set for %d s (%s)", alarm.id, seconds, label.c_str());
+    return alarm.id;
+}
+
+bool AlarmManager::CancelTimer(int id) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto it = std::find_if(alarms_.begin(), alarms_.end(),
+                           [id](const Alarm& a) { return a.id == id && a.is_timer; });
+    if (it == alarms_.end()) {
+        return false;
+    }
+    alarms_.erase(it);
+    SaveLocked();
+    return true;
+}
+
+bool AlarmManager::HasTimer(int id) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return std::any_of(alarms_.begin(), alarms_.end(),
+                       [id](const Alarm& a) { return a.id == id && a.is_timer; });
+}
+
+bool AlarmManager::ExtendTimer(int id, int seconds) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    Alarm* target = nullptr;
+    for (auto& alarm : alarms_) {
+        if (!alarm.is_timer) continue;
+        if (id != 0 ? alarm.id == id : (target == nullptr || alarm.fire_at < target->fire_at)) {
+            target = &alarm;
+        }
+    }
+    if (target == nullptr) {
+        return false;
+    }
+    target->fire_at += seconds;
+    SaveLocked();
+    ESP_LOGI(TAG, "Timer %d extended by %d s", target->id, seconds);
+    return true;
 }

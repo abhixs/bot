@@ -9,12 +9,15 @@
 #include "led/single_led.h"
 #include "mcp_server.h"
 #include "music_player.h"
+#include "pomodoro.h"
 #include "robo_audio_codec.h"
 #include "robo_eyes_display.h"
+#include "stopwatch.h"
 #include "voice_shortcuts.h"
 #include "wake_word_switch.h"
 #include "wifi_board.h"
 
+#include <cJSON.h>
 #include <driver/gpio.h>
 #include <driver/i2c_master.h>
 #include <esp_lcd_panel_ops.h>
@@ -92,6 +95,15 @@ private:
     static constexpr float kRingingWakeThreshold = 0.45f;
     // Timers shorter than this switch the screen to their countdown when set.
     static constexpr int kAutoCountdownSeconds = 31 * 60;
+    // "Extend" without a number.
+    static constexpr int kDefaultExtendSeconds = 10 * 60;
+    // A "stop" / "extend" this soon after a ring stopped (e.g. by "Alexa") is about it.
+    static constexpr int64_t kRecentRingUs = 60 * 1000000LL;
+    // While a Pomodoro runs, each new phase shows its countdown unless the user
+    // switched to another view.
+    bool pomodoro_view_ = false;
+    int64_t stopwatch_started_us_ = 0;
+    int64_t pomodoro_started_us_ = 0;
 
     // Ends the conversation right away, without the assistant saying anything: the
     // speaker is muted at once (whatever reply is already on its way is not heard)
@@ -146,44 +158,130 @@ private:
     // Local voice shortcuts (see voice_shortcuts.h), handled on the device from the
     // speech-to-text result so they act at once and the AI does not answer them.
     void HandleUserSpeech(const std::string& text) {
-        const VoiceShortcut shortcut = ParseVoiceShortcut(text);
-        if (shortcut == VoiceShortcut::None) return;
-        if (shortcut == VoiceShortcut::TimerMode &&
-            (eyes_display_ == nullptr || AlarmManager::GetInstance().SecondsToNextTimer() < 0)) {
-            return;  // no timer running: let the AI answer
+        const VoiceCommand command = ParseVoiceCommand(text);
+        if (command.type == VoiceShortcut::None) return;
+        if (!RunShortcut(command)) {
+            return;  // does not apply right now (e.g. "stop" with nothing ringing): the AI answers
         }
-        ESP_LOGI(TAG, "Voice shortcut: %s (%s)", VoiceShortcutName(shortcut), text.c_str());
-        // Every shortcut ends the conversation silently: the command is done here.
+        ESP_LOGI(TAG, "Voice shortcut: %s (%s)", VoiceShortcutName(command.type), text.c_str());
+        // The command is done here: end the conversation silently.
         GoStandby();
-        if (eyes_display_ == nullptr) return;
-        switch (shortcut) {
+    }
+
+    // Carries out a local voice shortcut. Returns false when it does not apply now.
+    bool RunShortcut(const VoiceCommand& command) {
+        auto& alarms = AlarmManager::GetInstance();
+        auto& pomodoro = Pomodoro::GetInstance();
+        auto& stopwatch = Stopwatch::GetInstance();
+        const bool ring_just_stopped =
+            alarms.last_ring_stop_us() != 0 &&
+            esp_timer_get_time() - alarms.last_ring_stop_us() < kRecentRingUs;
+        switch (command.type) {
+            case VoiceShortcut::Standby:
+                return true;
             case VoiceShortcut::Sleep:
-                eyes_display_->HoldExpression("sleeping", 8);
-                break;
+                if (eyes_display_ != nullptr) eyes_display_->HoldExpression("sleeping", 8);
+                return true;
             case VoiceShortcut::TimeMode:
-                eyes_display_->SetMainMode(MainDisplayMode::Time);
-                break;
             case VoiceShortcut::EmotionMode:
-                eyes_display_->SetMainMode(MainDisplayMode::Emotion);
-                break;
-            case VoiceShortcut::ToggleMode:
-                eyes_display_->SetMainMode(eyes_display_->main_mode() == MainDisplayMode::Time
-                                               ? MainDisplayMode::Emotion
-                                               : MainDisplayMode::Time);
-                break;
+            case VoiceShortcut::ToggleMode: {
+                if (eyes_display_ == nullptr) return false;
+                MainDisplayMode mode = command.type == VoiceShortcut::TimeMode ? MainDisplayMode::Time
+                                       : command.type == VoiceShortcut::EmotionMode
+                                           ? MainDisplayMode::Emotion
+                                           : (eyes_display_->main_mode() == MainDisplayMode::Time
+                                                  ? MainDisplayMode::Emotion
+                                                  : MainDisplayMode::Time);
+                eyes_display_->SetMainMode(mode);
+                pomodoro_view_ = false;  // the user picked another view
+                return true;
+            }
             case VoiceShortcut::TimerMode:
-                eyes_display_->ShowCountdown();
-                break;
+                if (eyes_display_ == nullptr) return false;
+                if (eyes_display_->ShowCountdown()) {
+                    pomodoro_view_ = pomodoro.active();
+                    return true;
+                }
+                return eyes_display_->ShowStopwatch();
             case VoiceShortcut::LightTheme:
-                eyes_display_->SetDisplayTheme(DisplayTheme::Light);
-                break;
             case VoiceShortcut::DarkTheme:
-                eyes_display_->SetDisplayTheme(DisplayTheme::Dark);
-                break;
-            default:
+                if (eyes_display_ == nullptr) return false;
+                eyes_display_->SetDisplayTheme(command.type == VoiceShortcut::LightTheme
+                                                   ? DisplayTheme::Light
+                                                   : DisplayTheme::Dark);
+                return true;
+            case VoiceShortcut::TimerSet:
+                return StartTimer(command.seconds, "");
+            case VoiceShortcut::Extend: {
+                const int seconds = command.seconds > 0 ? command.seconds : kDefaultExtendSeconds;
+                if (pomodoro.Extend(seconds)) {
+                    if (pomodoro_view_ && eyes_display_ != nullptr) eyes_display_->ShowCountdown();
+                    return true;
+                }
+                if (alarms.IsRinging() || ring_just_stopped) {
+                    alarms.StopRinging();
+                    return StartTimer(seconds, "Extension");  // like a snooze of that length
+                }
+                if (alarms.ExtendTimer(0, seconds)) return true;  // the running timer
+                return false;
+            }
+            case VoiceShortcut::StopAlarm:
+                if (pomodoro.Continue()) return true;  // focus over: the break starts
+                if (alarms.IsRinging()) {
+                    alarms.StopRinging();
+                    return true;
+                }
+                return ring_just_stopped;  // "Alexa" already silenced it: just "stop"
+            case VoiceShortcut::StopTimer:
+                if (stopwatch.Stop()) return true;
+                if (pomodoro.Continue()) return true;
+                if (alarms.IsRinging()) {
+                    alarms.StopRinging();
+                    return true;
+                }
+                return false;  // a running countdown: the AI cancels it
+            case VoiceShortcut::PomodoroStart:
+                pomodoro_view_ = true;
+                pomodoro_started_us_ = esp_timer_get_time();
+                pomodoro.Start(command.seconds > 0 ? command.seconds : Pomodoro::kFocusSeconds);
+                return pomodoro.active();
+            case VoiceShortcut::PomodoroStop:
+                if (!pomodoro.active()) return false;
+                pomodoro.Stop();
+                return true;
+            case VoiceShortcut::StopwatchStart:
+                stopwatch.Start();
+                stopwatch_started_us_ = esp_timer_get_time();
+                if (eyes_display_ != nullptr) eyes_display_->ShowStopwatch();
+                return true;
+            case VoiceShortcut::StopwatchPause:
+            case VoiceShortcut::StopwatchResume:
+            case VoiceShortcut::StopwatchShow: {
+                if (!stopwatch.active()) return false;
+                if (command.type == VoiceShortcut::StopwatchPause) stopwatch.Pause();
+                if (command.type == VoiceShortcut::StopwatchResume) stopwatch.Resume();
+                if (eyes_display_ != nullptr) eyes_display_->ShowStopwatch();
+                return true;
+            }
+            case VoiceShortcut::StopwatchStop:
+                return stopwatch.Stop();
+            case VoiceShortcut::None:
                 break;
         }
+        return false;
     }
+
+    // A countdown timer set on the device; a short one is shown at once.
+    bool StartTimer(int seconds, const std::string& label) {
+        if (seconds <= 0) return false;
+        const int id = AlarmManager::GetInstance().AddTimer(seconds, label);
+        if (id < 0) return false;
+        if (eyes_display_ != nullptr && seconds < kAutoCountdownSeconds) {
+            eyes_display_->ShowCountdown();
+        }
+        return true;
+    }
+
     Button boot_button_;
     Button touch_button_;
     Button volume_up_button_;
@@ -310,6 +408,9 @@ private:
         // Keep the words said right after the wake word (while the connection opens)
         // and send them first, so the server hears the whole sentence.
         Application::GetInstance().GetAudioService().EnableWakeWordSpeechBridge(true);
+        // The wake sound plays the moment "Alexa" is heard, not after the server
+        // connection is up.
+        Application::GetInstance().SetWakeSoundOnDetect(true);
         ClockSync::GetInstance().Initialize();  // keep the clock on IST
         RegisterWakeWordTools();
 
@@ -328,6 +429,7 @@ private:
 
         auto& alarms = AlarmManager::GetInstance();
         alarms.OnRingStart([this](const AlarmManager::RingInfo& info) {
+            Pomodoro::GetInstance().HandleRing(info);
             MusicPlayer::GetInstance().Stop();  // the alarm takes over the speaker
             // Listen harder for "Alexa" while it rings; back to normal when it stops.
             Application::GetInstance().GetAudioService().SetWakeWordThreshold(
@@ -356,10 +458,25 @@ private:
         });
         alarms.Initialize();
 
+        auto& pomodoro = Pomodoro::GetInstance();
+        pomodoro.OnPhaseStart([this](Pomodoro::Phase) {
+            if (pomodoro_view_ && eyes_display_ != nullptr) eyes_display_->ShowCountdown();
+        });
+        pomodoro.OnEnd([this]() {
+            pomodoro_view_ = false;
+            if (eyes_display_ != nullptr) eyes_display_->ClearCountdown();
+        });
+        pomodoro.Initialize();
+        pomodoro_view_ = pomodoro.active();
+        if (pomodoro_view_ && eyes_display_ != nullptr) eyes_display_->ShowCountdown();
+
         if (eyes_display_ != nullptr) {
             eyes_display_->OnUserSpeech([this](const std::string& text) { HandleUserSpeech(text); });
             eyes_display_->SetCountdownProvider([]() { return AlarmManager::GetInstance().SecondsToNextTimer(); });
             eyes_display_->SetClockFormatProvider([]() { return ClockSync::GetInstance().use_24h(); });
+            eyes_display_->SetStopwatchProvider(
+                []() { return Stopwatch::GetInstance().ElapsedSeconds(); },
+                []() { return Stopwatch::GetInstance().running(); });
         }
 
         auto& mcp = McpServer::GetInstance();
@@ -418,14 +535,85 @@ private:
                         std::string("mode must be time, emotion, timer or toggle"));
                 }
                 eyes_display_->SetMainMode(target);
+                pomodoro_view_ = false;
                 return std::string(target == MainDisplayMode::Time ? "{\"mode\":\"time\"}"
                                                                    : "{\"mode\":\"emotion\"}");
+            });
+        mcp.AddTool(
+            "self.pomodoro.start",
+            "Start a continuous Pomodoro session: focus (default 25 min) -> break (5 min) -> "
+            "focus -> ... until stopped. The countdown shows on the screen. Use for 'set "
+            "pomodoro timer', 'start pomodoro'. Do not also call self.alarm.set_timer.",
+            PropertyList({Property("focus_minutes", kPropertyTypeInteger, 25, 1, 120)}),
+            [this](const PropertyList& properties) -> ToolResult {
+                auto& pomodoro = Pomodoro::GetInstance();
+                if (pomodoro.active() && esp_timer_get_time() - pomodoro_started_us_ < 15000000LL) {
+                    return std::string("{\"success\":true,\"note\":\"already started\"}");
+                }
+                pomodoro_view_ = true;
+                pomodoro_started_us_ = esp_timer_get_time();
+                pomodoro.Start(properties["focus_minutes"].value<int>() * 60);
+                return pomodoro.active();
+            });
+        mcp.AddTool(
+            "self.pomodoro.extend",
+            "When a Pomodoro focus timer has just finished (or is running), extend the focus by "
+            "the given minutes, e.g. 'extend 10 minutes'. After the extension the break starts.",
+            PropertyList({Property("minutes", kPropertyTypeInteger, 10, 1, 120)}),
+            [this](const PropertyList& properties) -> ToolResult {
+                if (!Pomodoro::GetInstance().Extend(properties["minutes"].value<int>() * 60)) {
+                    return std::unexpected(std::string("No Pomodoro is running."));
+                }
+                if (pomodoro_view_ && eyes_display_ != nullptr) eyes_display_->ShowCountdown();
+                return true;
+            });
+        mcp.AddTool("self.pomodoro.stop", "End the Pomodoro session completely ('stop pomodoro').",
+                    PropertyList(), [](const PropertyList&) -> ToolResult {
+                        if (!Pomodoro::GetInstance().active()) {
+                            return std::string("{\"success\":true,\"note\":\"no pomodoro running\"}");
+                        }
+                        Pomodoro::GetInstance().Stop();
+                        return true;
+                    });
+        mcp.AddTool(
+            "self.stopwatch.control",
+            "Stopwatch that counts UP (not a countdown timer). action: 'start' (from 00:00), "
+            "'pause', 'resume', 'stop' (ends it and clears it from the screen) or 'show'. Use "
+            "for 'start stopwatch', 'pause stopwatch', 'end stopwatch'.",
+            PropertyList({Property("action", kPropertyTypeString).SetMaxLength(10)}),
+            [this](const PropertyList& properties) -> ToolResult {
+                auto& stopwatch = Stopwatch::GetInstance();
+                const std::string action = properties["action"].value<std::string>();
+                if (action == "start") {
+                    if (!(stopwatch.running() &&
+                          esp_timer_get_time() - stopwatch_started_us_ < 15000000LL)) {
+                        stopwatch.Start();  // (not again if just started from the same request)
+                        stopwatch_started_us_ = esp_timer_get_time();
+                    }
+                } else if (action == "pause") {
+                    stopwatch.Pause();
+                } else if (action == "resume") {
+                    stopwatch.Resume();
+                } else if (action == "stop") {
+                    stopwatch.Stop();
+                    return true;
+                } else if (action != "show") {
+                    return std::unexpected(std::string("action: start, pause, resume, stop or show"));
+                }
+                if (!stopwatch.active()) return std::unexpected(std::string("No stopwatch is on."));
+                if (eyes_display_ != nullptr) eyes_display_->ShowStopwatch();
+                cJSON* result = cJSON_CreateObject();
+                cJSON_AddNumberToObject(result, "elapsed_seconds", stopwatch.ElapsedSeconds());
+                cJSON_AddBoolToObject(result, "running", stopwatch.running());
+                return result;
             });
         mcp.AddTool(
             "self.assistant.standby",
             "End the conversation immediately and go to standby WITHOUT saying anything. Call it "
             "(and do not reply at all) when the user says bye, bye bye, goodbye, chup raho, chup "
-            "ho jao, so jao, stop talking or similar.",
+            "ho jao, so jao, stop talking or similar. Device style rule: keep replies short; if "
+            "you did not understand the user, answer only 'Sorry, nahi samajh paayi.' and "
+            "nothing else.",
             PropertyList(), [this](const PropertyList&) -> ToolResult {
                 Application::GetInstance().Schedule([this]() { GoStandby(); });
                 return true;

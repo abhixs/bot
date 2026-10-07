@@ -31,10 +31,12 @@ public:
         std::string title;  // e.g. "07:30" or "Timer"
         std::string label;
         bool lamp = false;
+        int id = 0;  // the alarm / timer that rings
+        bool is_timer = false;
     };
 
     static constexpr int kMaxAlarms = 10;
-    static constexpr int kRingSeconds = 60;
+    static constexpr int kRingSeconds = 20;  // then it stops by itself
     static constexpr int kMissedGraceSeconds = 10 * 60;
 
     static AlarmManager& GetInstance() {
@@ -57,6 +59,16 @@ public:
     int SecondsToNextTimer();
     // Stops a ringing alarm. With snooze_minutes > 0 it rings again later.
     void StopRinging(int snooze_minutes = 0);
+    // When the last ring stopped (esp_timer microseconds, 0 = never).
+    int64_t last_ring_stop_us() const { return last_ring_stop_us_; }
+
+    // Timers for the device's own features (Pomodoro, voice shortcuts). AddTimer
+    // returns the new timer's id, or -1 (clock not synced / list full).
+    int AddTimer(int seconds, const std::string& label);
+    bool CancelTimer(int id);
+    bool HasTimer(int id);
+    // Adds seconds to a running timer (the soonest one when id is 0).
+    bool ExtendTimer(int id, int seconds);
 
 private:
     AlarmManager() = default;
@@ -78,6 +90,12 @@ private:
     esp_timer_handle_t check_timer_ = nullptr;
     esp_timer_handle_t ring_timer_ = nullptr;
     bool ringing_ = false;
+    int64_t last_ring_stop_us_ = 0;
+    // A timer set on the device a moment ago: the AI's own set_timer call for the same
+    // request is then not doubled.
+    int64_t last_added_us_ = 0;
+    int last_added_seconds_ = 0;
+    int last_added_id_ = 0;
     int ring_elapsed_ms_ = 0;
     int next_tone_ms_ = 0;    // only touched on the main task
     int next_toggle_ms_ = 0;  // only touched on the main task

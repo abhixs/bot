@@ -20,6 +20,17 @@ enum class VoiceShortcut {
     EmotionMode,    // "show face", "emotions dikhao", "change the mode to emotions"
     ToggleMode,     // "change the mode", "switch mode"
     TimerMode,      // "show timer", "show countdown", "timer dikhao"
+    TimerSet,       // "set a timer for 10 minutes", "10 minute ka timer lagao" (seconds)
+    Extend,         // "extend 10 minutes", "10 minute aur" (seconds, default 10 min)
+    StopAlarm,      // "stop", "alarm band karo" (ringing alarm / Pomodoro decision)
+    StopTimer,      // "stop the timer": the stopwatch, else a ringing alarm
+    PomodoroStart,  // "set pomodoro timer", "pomodoro start karo" (seconds = focus, optional)
+    PomodoroStop,   // "stop pomodoro", "pomodoro band karo"
+    StopwatchStart, // "start stopwatch", "start the timer" (no duration)
+    StopwatchPause, // "pause stopwatch", "pause"
+    StopwatchResume,// "resume stopwatch", "resume"
+    StopwatchStop,  // "stop stopwatch", "end stopwatch", "reset stopwatch"
+    StopwatchShow,  // "show stopwatch"
     LightTheme,     // "light mode", "invert the screen", "make screen white"
     DarkTheme,      // "dark mode", "turn off light mode", "screen dark karo"
 };
@@ -28,6 +39,16 @@ enum class VoiceShortcut {
 // single spaces, and a leading / trailing wake word ("alexa") removed.
 std::string NormalizeSpeech(const std::string& text);
 
-VoiceShortcut ParseVoiceShortcut(const std::string& text);
+struct VoiceCommand {
+    VoiceShortcut type = VoiceShortcut::None;
+    int seconds = 0;  // duration for TimerSet / Extend / PomodoroStart (0 = none given)
+};
+
+VoiceCommand ParseVoiceCommand(const std::string& text);
+VoiceShortcut ParseVoiceShortcut(const std::string& text);  // ParseVoiceCommand(text).type
+
+// Duration spoken in the text ("10 minutes", "ten minute", "दस मिनट", "1 hour 30
+// minutes", "half an hour"), in seconds; 0 when there is none.
+int ParseDuration(const std::string& normalized_text);
 
 const char* VoiceShortcutName(VoiceShortcut shortcut);

@@ -110,6 +110,9 @@ public:
 
     void Reboot();
     void WakeWordInvoke(const std::string& wake_word);
+    // Play the wake sound (popup) the moment the wake word is detected, before the
+    // audio channel is opened, instead of when listening starts. Off by default.
+    void SetWakeSoundOnDetect(bool enable) { wake_sound_on_detect_ = enable; }
     bool UpgradeFirmware(const std::string& url, const std::string& version = "");
     bool CanEnterSleepMode();
     void SendMcpMessage(const std::string& payload);
@@ -150,6 +153,8 @@ private:
     bool aborted_ = false;
     bool assets_version_checked_ = false;
     bool play_popup_on_listening_ = false;  // Flag to play popup sound after state changes to listening
+    bool wake_sound_on_detect_ = false;     // see SetWakeSoundOnDetect()
+    void PlayWakeSoundNow();
     bool pending_listening_start_ = false;  // Waiting for playback to drain before starting listening (auto mode)
     int clock_ticks_ = 0;
     TaskHandle_t activation_task_handle_ = nullptr;
