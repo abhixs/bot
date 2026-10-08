@@ -177,7 +177,15 @@ bool AfeAudioEngine::Initialize(AudioCodec* codec, int frame_duration_ms,
         }
         wakenet_count_ = std::min<int>(2, wakenet_models.size());
     }
-    afe_config->agc_init = false;
+    // Uplink AGC (opt-in, e.g. a single far-field MEMS mic): WebRTC fixed-digital AGC
+    // on the AFE output only, i.e. the speech sent to the server. Up to +12 dB for
+    // quiet or distant speech, loud speech limited near -3 dBFS.
+    afe_config->agc_init = uplink_agc_ && kUseAfeForVoiceProcessing;
+    if (afe_config->agc_init) {
+        afe_config->agc_mode = AFE_AGC_MODE_WEBRTC;
+        afe_config->agc_compression_gain_db = 12;
+        afe_config->agc_target_level_dbfs = 3;
+    }
     afe_config->memory_alloc_mode = AFE_MEMORY_ALLOC_MORE_PSRAM;
 
     ESP_LOGI(TAG, "Before AFE create: free=%u min=%u largest=%u",
@@ -188,6 +196,16 @@ bool AfeAudioEngine::Initialize(AudioCodec* codec, int frame_duration_ms,
     if (afe_iface_ != nullptr) {
         afe_data_ = afe_iface_->create_from_config(afe_config);
     }
+    if (afe_data_ == nullptr && afe_config->agc_init) {
+        // Never lose the audio front end over the optional AGC.
+        ESP_LOGW(TAG, "AFE with AGC failed, creating it without AGC");
+        afe_config->agc_init = false;
+        afe_iface_ = esp_afe_handle_from_config(afe_config);
+        if (afe_iface_ != nullptr) {
+            afe_data_ = afe_iface_->create_from_config(afe_config);
+        }
+    }
+    const bool agc_on = afe_data_ != nullptr && afe_config->agc_init;
     afe_config_free(afe_config);
 
     if (afe_iface_ == nullptr || afe_data_ == nullptr) {
@@ -242,8 +260,9 @@ bool AfeAudioEngine::Initialize(AudioCodec* codec, int frame_duration_ms,
     const char* detector = wake_detector_ == WakeDetector::kWakeNet
                                ? "WakeNet"
                                : (wake_detector_ == WakeDetector::kMultiNet ? "MultiNet" : "none");
-    ESP_LOGI(TAG, "Initialized FD AFE, detector: %s, NS: off, feed: %d, fetch: %d", detector,
-             afe_iface_->get_feed_chunksize(afe_data_), afe_iface_->get_fetch_chunksize(afe_data_));
+    ESP_LOGI(TAG, "Initialized FD AFE, detector: %s, NS: off, AGC: %s, feed: %d, fetch: %d",
+             detector, agc_on ? "on" : "off", afe_iface_->get_feed_chunksize(afe_data_),
+             afe_iface_->get_fetch_chunksize(afe_data_));
     ESP_LOGI(TAG, "After AFE create: free=%u min=%u largest=%u",
              heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
              heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL),
@@ -315,6 +334,10 @@ void AfeAudioEngine::SetWakeWordThreshold(float threshold) {
     wakenet_threshold_.store(threshold);
     wakenet_threshold_dirty_.store(true);
     afe_control_dirty_ = true;
+}
+
+bool AfeAudioEngine::HasProcessedOutput() const {
+    return kUseAfeForVoiceProcessing && afe_data_ != nullptr;
 }
 
 bool AfeAudioEngine::HasWakeWord() const { return wake_detector_ != WakeDetector::kNone; }

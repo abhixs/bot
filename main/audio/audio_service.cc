@@ -90,10 +90,11 @@ void AudioService::Initialize(AudioCodec* codec) {
     audio_engine_ = std::make_unique<LiteAudioEngine>();
 #endif
     audio_engine_->OnOutput([this](std::vector<int16_t>&& data) {
-        if (bridge_state_.load() == kBridgeDraining) {
-            // Older speech is still queued in the bridge: keep the order.
+        if (bridge_state_.load() != kBridgeOff) {
+            // Recording after the wake word, or older speech still queued in the
+            // bridge: keep it there, in order.
             std::unique_lock<std::mutex> bridge_lock(bridge_mutex_);
-            if (bridge_state_.load() == kBridgeDraining) {
+            if (bridge_state_.load() != kBridgeOff) {
                 BridgeAppendLocked(data.data(), data.size(), 1);
                 bridge_lock.unlock();
                 { std::lock_guard<std::mutex> lock(audio_queue_mutex_); }
@@ -327,6 +328,10 @@ void AudioService::AudioInputTask() {
         if ((bits & AS_EVENT_BRIDGE_CAPTURING) && !(bits & AS_EVENT_AUDIO_PROCESSOR_RUNNING)) {
             std::vector<int16_t> data;
             if (ReadAudioData(data, 16000, 160)) {
+                if (bridge_processed_.load()) {
+                    audio_engine_->Feed(std::move(data));  // output lands in the bridge
+                    continue;
+                }
                 std::lock_guard<std::mutex> lock(bridge_mutex_);
                 if (bridge_state_.load() == kBridgeCapturing) {
                     const size_t channels = std::max(1, codec_->input_channels());
@@ -939,6 +944,7 @@ bool AudioService::InitializeAudioEngine() {
     if (audio_engine_initialized_) {
         return true;
     }
+    audio_engine_->SetUplinkAgc(uplink_agc_);
     if (!audio_engine_->Initialize(codec_, OPUS_FRAME_DURATION_MS, models_list_)) {
         ESP_LOGE(TAG, "Failed to initialize audio engine");
         return false;
@@ -973,15 +979,30 @@ void AudioService::BridgeStart() {
     bridge_head_ = 0;
     bridge_size_ = 0;
     bridge_state_.store(kBridgeCapturing);
+    // Run the engine's voice processing right away (same task as the detection),
+    // so the bridged speech is processed exactly like the live audio after it.
+    bridge_processed_.store(audio_engine_->HasProcessedOutput());
+    if (bridge_processed_.load()) {
+        audio_engine_->EnableVoiceProcessing(true);
+    }
     xEventGroupSetBits(event_group_, AS_EVENT_BRIDGE_CAPTURING);
 }
 
 void AudioService::BridgeStop() {
     xEventGroupClearBits(event_group_, AS_EVENT_BRIDGE_CAPTURING);
-    std::lock_guard<std::mutex> lock(bridge_mutex_);
-    bridge_state_.store(kBridgeOff);
-    bridge_head_ = 0;
-    bridge_size_ = 0;
+    bool was_capturing = false;
+    {
+        std::lock_guard<std::mutex> lock(bridge_mutex_);
+        was_capturing = bridge_state_.load() == kBridgeCapturing;
+        bridge_state_.store(kBridgeOff);
+        bridge_head_ = 0;
+        bridge_size_ = 0;
+    }
+    // Listening never started: switch the engine's voice processing off again.
+    if (was_capturing && bridge_processed_.load() && !IsAudioProcessorRunning() &&
+        audio_engine_initialized_) {
+        audio_engine_->EnableVoiceProcessing(false);
+    }
 }
 
 // Listening starts: the recorded speech goes out first, then the live audio.
