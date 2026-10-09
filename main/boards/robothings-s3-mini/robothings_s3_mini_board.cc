@@ -408,9 +408,6 @@ private:
         // Keep the words said right after the wake word (while the connection opens)
         // and send them first, so the server hears the whole sentence.
         Application::GetInstance().GetAudioService().EnableWakeWordSpeechBridge(true);
-        // A single MEMS mic at a distance gives a low, varying speech level: let the
-        // AFE's AGC even it out for the speech recognition (uplink only).
-        Application::GetInstance().GetAudioService().EnableUplinkAgc(true);
         // The wake sound plays the moment "Alexa" is heard, not after the server
         // connection is up.
         Application::GetInstance().SetWakeSoundOnDetect(true);

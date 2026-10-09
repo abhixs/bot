@@ -88,14 +88,9 @@ Commands are recognised from their key words, so natural variations work.
 
 ## Microphone, echo cancellation and alarms
 
-- **Words said right after "Alexa" are kept**: the AFE's voice processing starts the
-  moment the wake word is detected and its output is kept while the connection opens,
-  then sent first, so "Alexa, roo ke dikhao" in one breath reaches the server complete
-  and processed exactly like the rest of the sentence.
-- **Uplink AGC**: the ESP-SR AFE's WebRTC AGC (fixed digital, up to +12 dB, limited
-  near -3 dBFS) evens out quiet / distant and loud speech before it is sent. It does
-  not change the wake word input. If the AFE cannot be created with it, it starts
-  without it (logged).
+- **Words said right after "Alexa" are kept**: the microphone keeps recording while the
+  connection opens and that speech is sent first, so "Alexa, roo ke dikhao" in one
+  breath reaches the server complete.
 - **Echo cancellation**: the MAX98357A cannot feed its output back, so the firmware
   keeps a copy of what it plays (software playback reference) and the ESP-SR AFE
   removes the device's own sound from the microphone while it listens for the wake

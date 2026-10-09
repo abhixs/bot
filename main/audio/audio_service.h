@@ -159,9 +159,6 @@ public:
     // Wake word detection threshold (0.4 - 0.9999, lower is more sensitive); a value
     // <= 0 restores the model default.
     void SetWakeWordThreshold(float threshold);
-    // Uplink automatic gain control in the audio engine (off by default). Call before
-    // the audio engine starts (e.g. from the board constructor).
-    void EnableUplinkAgc(bool enable) { uplink_agc_ = enable; }
 
 private:
     AudioCodec* codec_ = nullptr;
@@ -229,10 +226,6 @@ private:
     enum BridgeState { kBridgeOff, kBridgeCapturing, kBridgeDraining };
     static constexpr size_t kBridgeMaxSamples = 16000 * 4;  // 4 s, in PSRAM
     std::atomic<bool> bridge_enabled_{false};
-    // The bridge records the engine's processed output (same processing as the live
-    // audio) when it has one, else raw microphone samples.
-    std::atomic<bool> bridge_processed_{false};
-    bool uplink_agc_ = false;
     std::atomic<int> bridge_state_{kBridgeOff};
     std::mutex bridge_mutex_;
     int16_t* bridge_buffer_ = nullptr;

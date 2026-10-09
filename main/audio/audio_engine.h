@@ -39,11 +39,6 @@ public:
     // Wake word detection threshold (0.4 - 0.9999, lower is more sensitive); a value
     // <= 0 restores the model default. Engines without support ignore it.
     virtual void SetWakeWordThreshold(float threshold) { (void)threshold; }
-    // Automatic gain control on the uplink (speech sent to the server). Must be set
-    // before Initialize(); engines without one ignore it.
-    virtual void SetUplinkAgc(bool enable) { (void)enable; }
-    // True when voice processing produces processed audio (not raw passthrough).
-    virtual bool HasProcessedOutput() const { return false; }
 };
 
 #endif
