@@ -6,10 +6,12 @@
 #include "button.h"
 #include "clock_sync.h"
 #include "config.h"
+#include "device_action.h"
 #include "led/single_led.h"
 #include "mcp_server.h"
 #include "music_player.h"
 #include "pomodoro.h"
+#include "popdown_sound.h"
 #include "robo_audio_codec.h"
 #include "robo_eyes_display.h"
 #include "stopwatch.h"
@@ -57,11 +59,13 @@ public:
                     });
         mcp.AddTool("self.lamp.turn_on", "Turn on the lamp", PropertyList(),
                     [this](const PropertyList&) -> ToolResult {
+                        NoteDeviceAction();
                         Set(true);
                         return true;
                     });
         mcp.AddTool("self.lamp.turn_off", "Turn off the lamp", PropertyList(),
                     [this](const PropertyList&) -> ToolResult {
+                        NoteDeviceAction();
                         Set(false);
                         return true;
                     });
@@ -77,8 +81,18 @@ private:
     bool power_ = false;
 };
 
+class RoboThingsS3MiniBoard;
+static RoboThingsS3MiniBoard* g_board = nullptr;  // for NoteDeviceAction()
+
 class RoboThingsS3MiniBoard : public WifiBoard {
 private:
+    // How GoStandby() ends a conversation.
+    enum class StandbyStyle {
+        Silent,     // mute at once: whatever reply is on its way is not heard
+        Quiet,      // just close it (nothing to silence; lets the wake sound finish)
+        EndBeep,    // Silent, then the short "done listening" beep (inactivity)
+    };
+
     i2c_master_bus_handle_t display_i2c_bus_ = nullptr;
     esp_lcd_panel_io_handle_t panel_io_ = nullptr;
     esp_lcd_panel_handle_t panel_ = nullptr;
@@ -102,15 +116,29 @@ private:
     // While a Pomodoro runs, each new phase shows its countdown unless the user
     // switched to another view.
     bool pomodoro_view_ = false;
+    StandbyStyle standby_style_ = StandbyStyle::Silent;
+    bool standby_requested_ = false;  // a standby we started (main task)
+
+    // Conversation watcher (main task, every 50 ms): wake word sensitivity, the
+    // inactivity ending and command mode.
+    static constexpr float kSpeakingWakeThreshold = 0.5f;
+    esp_timer_handle_t conversation_timer_ = nullptr;
+    DeviceState watched_state_ = kDeviceStateUnknown;
+    float applied_wake_threshold_ = 0.0f;
+    bool user_turn_seen_ = false;  // the user said something in this listening turn
+    bool action_pending_ = false;  // a device action ran: close after its reply
     int64_t stopwatch_started_us_ = 0;
     int64_t pomodoro_started_us_ = 0;
 
-    // Ends the conversation right away, without the assistant saying anything: the
-    // speaker is muted at once (whatever reply is already on its way is not heard)
-    // and stays muted until the device is back in standby.
-    void GoStandby() {
-        if (codec_ != nullptr) codec_->SetMuted(true);
-        Application::GetInstance().GetAudioService().ResetDecoder();
+    // Ends the conversation right away, without the assistant saying anything.
+    // Silent / EndBeep keep the speaker muted until the device is back in standby.
+    void GoStandby(StandbyStyle style = StandbyStyle::Silent) {
+        standby_style_ = style;
+        standby_requested_ = true;
+        if (style != StandbyStyle::Quiet) {
+            if (codec_ != nullptr) codec_->SetMuted(true);
+            Application::GetInstance().GetAudioService().ResetDecoder();
+        }
         if (standby_timer_ == nullptr) {
             esp_timer_create_args_t args = {
                 .callback = [](void* arg) { static_cast<RoboThingsS3MiniBoard*>(arg)->StandbyTick(); },
@@ -140,13 +168,20 @@ private:
         }
         if (state == kDeviceStateIdle || now > standby_deadline_us_) {
             esp_timer_stop(standby_timer_);
-            app.GetAudioService().ResetDecoder();
-            if (codec_ != nullptr) codec_->SetMuted(false);
+            if (standby_style_ != StandbyStyle::Quiet) {
+                app.GetAudioService().ResetDecoder();
+                if (codec_ != nullptr) codec_->SetMuted(false);
+            }
+            if (standby_style_ == StandbyStyle::EndBeep && state == kDeviceStateIdle) {
+                app.PlaySound(PopDownOgg());  // "done listening"
+            }
             return;
         }
         idle_since_us_ = 0;
         if (state == kDeviceStateListening || state == kDeviceStateSpeaking) {
-            app.GetAudioService().ResetDecoder();  // drop any reply right away
+            if (standby_style_ != StandbyStyle::Quiet) {
+                app.GetAudioService().ResetDecoder();  // drop any reply right away
+            }
             if (now - last_toggle_us_ > 300 * 1000) {
                 // speaking: abort the reply; listening: close the conversation
                 app.ToggleChatState();
@@ -158,6 +193,7 @@ private:
     // Local voice shortcuts (see voice_shortcuts.h), handled on the device from the
     // speech-to-text result so they act at once and the AI does not answer them.
     void HandleUserSpeech(const std::string& text) {
+        user_turn_seen_ = true;
         const VoiceCommand command = ParseVoiceCommand(text);
         if (command.type == VoiceShortcut::None) return;
         if (!RunShortcut(command)) {
@@ -214,11 +250,15 @@ private:
                 return StartTimer(command.seconds, "");
             case VoiceShortcut::Extend: {
                 const int seconds = command.seconds > 0 ? command.seconds : kDefaultExtendSeconds;
-                if (pomodoro.Extend(seconds)) {
+                const bool was_ringing = alarms.IsRinging();
+                if (pomodoro.active()) {
+                    // The current period (focus or break), the cycle goes on.
+                    if (was_ringing) alarms.StopRinging();
+                    if (!pomodoro.Extend(seconds)) return false;
                     if (pomodoro_view_ && eyes_display_ != nullptr) eyes_display_->ShowCountdown();
                     return true;
                 }
-                if (alarms.IsRinging() || ring_just_stopped) {
+                if (was_ringing || ring_just_stopped) {
                     alarms.StopRinging();
                     return StartTimer(seconds, "Extension");  // like a snooze of that length
                 }
@@ -226,15 +266,14 @@ private:
                 return false;
             }
             case VoiceShortcut::StopAlarm:
-                if (pomodoro.Continue()) return true;  // focus over: the break starts
                 if (alarms.IsRinging()) {
                     alarms.StopRinging();
                     return true;
                 }
+                if (alarms.CancelPendingRing()) return true;  // between the alarm's rings
                 return ring_just_stopped;  // "Alexa" already silenced it: just "stop"
             case VoiceShortcut::StopTimer:
                 if (stopwatch.Stop()) return true;
-                if (pomodoro.Continue()) return true;
                 if (alarms.IsRinging()) {
                     alarms.StopRinging();
                     return true;
@@ -249,6 +288,10 @@ private:
                 if (!pomodoro.active()) return false;
                 pomodoro.Stop();
                 return true;
+            case VoiceShortcut::PomodoroPause:
+                return pomodoro.Pause();
+            case VoiceShortcut::PomodoroResume:
+                return pomodoro.Resume();
             case VoiceShortcut::StopwatchStart:
                 stopwatch.Start();
                 stopwatch_started_us_ = esp_timer_get_time();
@@ -257,7 +300,12 @@ private:
             case VoiceShortcut::StopwatchPause:
             case VoiceShortcut::StopwatchResume:
             case VoiceShortcut::StopwatchShow: {
-                if (!stopwatch.active()) return false;
+                if (!stopwatch.active()) {
+                    // Plain "pause" / "resume" with no stopwatch: the Pomodoro.
+                    if (command.type == VoiceShortcut::StopwatchPause) return pomodoro.Pause();
+                    if (command.type == VoiceShortcut::StopwatchResume) return pomodoro.Resume();
+                    return false;
+                }
                 if (command.type == VoiceShortcut::StopwatchPause) stopwatch.Pause();
                 if (command.type == VoiceShortcut::StopwatchResume) stopwatch.Resume();
                 if (eyes_display_ != nullptr) eyes_display_->ShowStopwatch();
@@ -280,6 +328,82 @@ private:
             eyes_display_->ShowCountdown();
         }
         return true;
+    }
+
+    // A device action ran (MCP tool): end the conversation after its reply.
+    friend void NoteDeviceAction();
+    void MarkDeviceAction() { action_pending_ = true; }
+
+    void StartConversationWatcher() {
+        esp_timer_create_args_t args = {
+            .callback =
+                [](void* arg) {
+                    auto* self = static_cast<RoboThingsS3MiniBoard*>(arg);
+                    Application::GetInstance().Schedule([self]() { self->WatchConversation(); });
+                },
+            .arg = this,
+            .dispatch_method = ESP_TIMER_TASK,
+            .name = "conversation",
+            .skip_unhandled_events = true,
+        };
+        esp_timer_create(&args, &conversation_timer_);
+        esp_timer_start_periodic(conversation_timer_, 50 * 1000);
+    }
+
+    void WatchConversation() {
+        auto& app = Application::GetInstance();
+        auto& alarms = AlarmManager::GetInstance();
+        const DeviceState state = app.GetDeviceState();
+
+        // Wake word: more sensitive only while an alarm rings or the assistant speaks
+        // (the speaker is next to the mic); the model default otherwise.
+        const float threshold = alarms.IsRinging()               ? kRingingWakeThreshold
+                                : state == kDeviceStateSpeaking ? kSpeakingWakeThreshold
+                                                                : 0.0f;
+        if (threshold != applied_wake_threshold_) {
+            app.GetAudioService().SetWakeWordThreshold(threshold);
+            applied_wake_threshold_ = threshold;
+        }
+
+        if (state == watched_state_) return;
+        const DeviceState previous = watched_state_;
+        watched_state_ = state;
+        const bool our_standby = standby_requested_;
+        switch (state) {
+            case kDeviceStateConnecting:
+                user_turn_seen_ = false;
+                action_pending_ = false;
+                break;
+            case kDeviceStateListening:
+                if (previous == kDeviceStateSpeaking && action_pending_ && !our_standby) {
+                    // Command mode: the reply to a device action is over.
+                    ESP_LOGI(TAG, "Device action done: back to standby");
+                    action_pending_ = false;
+                    GoStandby(StandbyStyle::Quiet);
+                    break;
+                }
+                user_turn_seen_ = false;  // a new listening turn
+                break;
+            case kDeviceStateSpeaking:
+                if (previous == kDeviceStateListening && !user_turn_seen_ && !our_standby) {
+                    // The server speaks although the user said nothing: its goodbye after
+                    // the inactivity timeout. Silence it and just beep.
+                    ESP_LOGI(TAG, "Listening timed out: ending with the beep");
+                    GoStandby(StandbyStyle::EndBeep);
+                }
+                break;
+            case kDeviceStateIdle:
+                if (previous == kDeviceStateListening && !user_turn_seen_ && !our_standby &&
+                    !alarms.IsRinging()) {
+                    // The listening ended with nothing said (server timeout, no goodbye).
+                    app.PlaySound(PopDownOgg());
+                }
+                standby_requested_ = false;
+                action_pending_ = false;
+                break;
+            default:
+                break;
+        }
     }
 
     Button boot_button_;
@@ -431,9 +555,6 @@ private:
         alarms.OnRingStart([this](const AlarmManager::RingInfo& info) {
             Pomodoro::GetInstance().HandleRing(info);
             MusicPlayer::GetInstance().Stop();  // the alarm takes over the speaker
-            // Listen harder for "Alexa" while it rings; back to normal when it stops.
-            Application::GetInstance().GetAudioService().SetWakeWordThreshold(
-                kRingingWakeThreshold);
             if (info.lamp && lamp_ != nullptr) {
                 lamp_->Set(true);
             }
@@ -445,7 +566,6 @@ private:
             }
         });
         alarms.OnRingStop([this]() {
-            Application::GetInstance().GetAudioService().SetWakeWordThreshold(0.0f);
             if (eyes_display_ != nullptr) {
                 eyes_display_->ClearAlarmBanner();
             }
@@ -455,6 +575,11 @@ private:
             if (eyes_display_ != nullptr && seconds < kAutoCountdownSeconds) {
                 eyes_display_->ShowCountdown();
             }
+        });
+        alarms.OnRingAnswered([this](const AlarmManager::RingInfo& info) {
+            // "Alexa" over an alarm: it stops and the device goes back to standby (a
+            // timer / Pomodoro keeps listening, e.g. for "extend 10 minutes").
+            if (!info.is_timer) GoStandby(StandbyStyle::Quiet);
         });
         alarms.Initialize();
 
@@ -472,7 +597,14 @@ private:
 
         if (eyes_display_ != nullptr) {
             eyes_display_->OnUserSpeech([this](const std::string& text) { HandleUserSpeech(text); });
-            eyes_display_->SetCountdownProvider([]() { return AlarmManager::GetInstance().SecondsToNextTimer(); });
+            eyes_display_->SetCountdownProvider([]() {
+                const int seconds = AlarmManager::GetInstance().SecondsToNextTimer();
+                return seconds >= 0 ? seconds : Pomodoro::GetInstance().paused_remaining();
+            });
+            eyes_display_->SetCountdownPausedProvider([]() {
+                return Pomodoro::GetInstance().paused() &&
+                       AlarmManager::GetInstance().SecondsToNextTimer() < 0;
+            });
             eyes_display_->SetClockFormatProvider([]() { return ClockSync::GetInstance().use_24h(); });
             eyes_display_->SetStopwatchProvider(
                 []() { return Stopwatch::GetInstance().ElapsedSeconds(); },
@@ -492,6 +624,7 @@ private:
                 Property("seconds", kPropertyTypeInteger, 10, 2, 120),
             }),
             [this](const PropertyList& properties) -> ToolResult {
+                NoteDeviceAction();
                 if (eyes_display_ == nullptr) return std::unexpected(std::string("No display"));
                 std::string name = properties["expression"].value<std::string>();
                 std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c) {
@@ -512,6 +645,7 @@ private:
             "self.screen.set_theme.)",
             PropertyList({Property("mode", kPropertyTypeString).SetMaxLength(10)}),
             [this](const PropertyList& properties) -> ToolResult {
+                NoteDeviceAction();
                 if (eyes_display_ == nullptr) return std::unexpected(std::string("No display"));
                 std::string mode = properties["mode"].value<std::string>();
                 std::transform(mode.begin(), mode.end(), mode.begin(),
@@ -546,6 +680,7 @@ private:
             "pomodoro timer', 'start pomodoro'. Do not also call self.alarm.set_timer.",
             PropertyList({Property("focus_minutes", kPropertyTypeInteger, 25, 1, 120)}),
             [this](const PropertyList& properties) -> ToolResult {
+                NoteDeviceAction();
                 auto& pomodoro = Pomodoro::GetInstance();
                 if (pomodoro.active() && esp_timer_get_time() - pomodoro_started_us_ < 15000000LL) {
                     return std::string("{\"success\":true,\"note\":\"already started\"}");
@@ -557,18 +692,38 @@ private:
             });
         mcp.AddTool(
             "self.pomodoro.extend",
-            "When a Pomodoro focus timer has just finished (or is running), extend the focus by "
-            "the given minutes, e.g. 'extend 10 minutes'. After the extension the break starts.",
+            "Extend the current Pomodoro period (focus or break, whichever runs) by the given "
+            "minutes, e.g. 'extend 10 minutes'. The cycle goes on afterwards.",
             PropertyList({Property("minutes", kPropertyTypeInteger, 10, 1, 120)}),
             [this](const PropertyList& properties) -> ToolResult {
+                NoteDeviceAction();
                 if (!Pomodoro::GetInstance().Extend(properties["minutes"].value<int>() * 60)) {
                     return std::unexpected(std::string("No Pomodoro is running."));
                 }
                 if (pomodoro_view_ && eyes_display_ != nullptr) eyes_display_->ShowCountdown();
                 return true;
             });
+        mcp.AddTool("self.pomodoro.pause",
+                    "Pause the running Pomodoro period; it keeps its remaining time.",
+                    PropertyList(), [](const PropertyList&) -> ToolResult {
+                        NoteDeviceAction();
+                        if (!Pomodoro::GetInstance().Pause()) {
+                            return std::unexpected(std::string("No running Pomodoro to pause."));
+                        }
+                        return true;
+                    });
+        mcp.AddTool("self.pomodoro.resume",
+                    "Resume (continue) a paused Pomodoro from where it was paused.",
+                    PropertyList(), [](const PropertyList&) -> ToolResult {
+                        NoteDeviceAction();
+                        if (!Pomodoro::GetInstance().Resume()) {
+                            return std::unexpected(std::string("No paused Pomodoro."));
+                        }
+                        return true;
+                    });
         mcp.AddTool("self.pomodoro.stop", "End the Pomodoro session completely ('stop pomodoro').",
                     PropertyList(), [](const PropertyList&) -> ToolResult {
+                        NoteDeviceAction();
                         if (!Pomodoro::GetInstance().active()) {
                             return std::string("{\"success\":true,\"note\":\"no pomodoro running\"}");
                         }
@@ -582,6 +737,7 @@ private:
             "for 'start stopwatch', 'pause stopwatch', 'end stopwatch'.",
             PropertyList({Property("action", kPropertyTypeString).SetMaxLength(10)}),
             [this](const PropertyList& properties) -> ToolResult {
+                NoteDeviceAction();
                 auto& stopwatch = Stopwatch::GetInstance();
                 const std::string action = properties["action"].value<std::string>();
                 if (action == "start") {
@@ -630,6 +786,8 @@ public:
         InitializeSsd1306Display();
         InitializeButtons();
         InitializeTools();
+        g_board = this;
+        StartConversationWatcher();
     }
 
     Led* GetLed() override {
@@ -648,5 +806,9 @@ public:
 
     Display* GetDisplay() override { return display_; }
 };
+
+void NoteDeviceAction() {
+    if (g_board != nullptr) g_board->MarkDeviceAction();
+}
 
 DECLARE_BOARD(RoboThingsS3MiniBoard);

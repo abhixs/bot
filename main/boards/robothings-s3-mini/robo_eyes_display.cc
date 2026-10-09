@@ -465,7 +465,9 @@ void RoboEyesDisplay::UpdateDotFace(bool show_clock, int countdown_s) {
         if (minutes >= 100) {
             dot_clock_->Set(two(minutes / 60), two(minutes % 60), blink_on);
         } else {
-            dot_clock_->Set(two(minutes), two(countdown_s % 60), true);
+            // A paused Pomodoro: the colon blinks.
+            const bool paused = countdown_paused_ && countdown_paused_();
+            dot_clock_->Set(two(minutes), two(countdown_s % 60), paused ? blink_on : true);
         }
         return;
     }
@@ -508,8 +510,8 @@ void RoboEyesDisplay::SetStatus(const char* status) {
 
 void RoboEyesDisplay::SetChatMessage(const char* role, const char* content) {
     if (role != nullptr && strcmp(role, "user") == 0) {
-        if (content == nullptr || content[0] == '\0') return;
-        if (on_user_speech_) on_user_speech_(content);
+        // Passed on even when empty: it still means the user had a turn.
+        if (on_user_speech_) on_user_speech_(content != nullptr ? content : "");
         return;
     }
     // The face fills the screen, so only system messages (activation code,

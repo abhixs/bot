@@ -1,5 +1,6 @@
 #include "clock_sync.h"
 
+#include "device_action.h"
 #include "mcp_server.h"
 #include "settings.h"
 
@@ -36,6 +37,7 @@ void ClockSync::Initialize() {
             Property("utc_offset_minutes", kPropertyTypeInteger, -720, 840),
         }),
         [this](const PropertyList& properties) -> ToolResult {
+            NoteDeviceAction();
             SetOffsetMinutes(properties["utc_offset_minutes"].value<int>());
             return true;
         });
@@ -46,6 +48,7 @@ void ClockSync::Initialize() {
         "format 12 hours pe kar do'. hours: 12 or 24.",
         PropertyList({Property("hours", kPropertyTypeInteger, 12, 24)}),
         [this](const PropertyList& properties) -> ToolResult {
+            NoteDeviceAction();
             int hours = properties["hours"].value<int>();
             if (hours != 12 && hours != 24) {
                 return std::unexpected(std::string("hours must be 12 or 24"));

@@ -300,6 +300,8 @@ VoiceCommand ParseStopwatch(const Sentence& s) {
 }
 
 VoiceCommand ParsePomodoro(const Sentence& s) {
+    if (s.Has(kPauseWords)) return {VoiceShortcut::PomodoroPause};
+    if (s.Has(kResumeWords)) return {VoiceShortcut::PomodoroResume};
     if (s.Has(kStopWords)) return {VoiceShortcut::PomodoroStop};
     if (s.Has(kExtendWords)) return {VoiceShortcut::Extend, DurationOf(s)};
     if (s.Has(kShowWords) && !s.Has(kSetWords)) return {VoiceShortcut::TimerMode};
@@ -431,6 +433,10 @@ const char* VoiceShortcutName(VoiceShortcut shortcut) {
             return "pomodoro start";
         case VoiceShortcut::PomodoroStop:
             return "pomodoro stop";
+        case VoiceShortcut::PomodoroPause:
+            return "pomodoro pause";
+        case VoiceShortcut::PomodoroResume:
+            return "pomodoro resume";
         case VoiceShortcut::StopwatchStart:
             return "stopwatch start";
         case VoiceShortcut::StopwatchPause:

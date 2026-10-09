@@ -26,6 +26,8 @@ enum class VoiceShortcut {
     StopTimer,      // "stop the timer": the stopwatch, else a ringing alarm
     PomodoroStart,  // "set pomodoro timer", "pomodoro start karo" (seconds = focus, optional)
     PomodoroStop,   // "stop pomodoro", "pomodoro band karo"
+    PomodoroPause,  // "pause the pomodoro"
+    PomodoroResume, // "resume / continue the pomodoro"
     StopwatchStart, // "start stopwatch", "start the timer" (no duration)
     StopwatchPause, // "pause stopwatch", "pause"
     StopwatchResume,// "resume stopwatch", "resume"

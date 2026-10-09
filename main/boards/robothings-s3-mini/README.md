@@ -60,15 +60,26 @@ Commands are recognised from their key words, so natural variations work.
   - "Stop" / "alarm band karo": stops the ringing alarm (also right after "Alexa"
     silenced it).
   - **Pomodoro**: "set Pomodoro timer" starts 25 min focus -> 5 min break -> 25 min
-    focus ... When a focus ends: "extend 10 minutes" (focus extension) or "stop" / no
-    answer (the break starts). When a break ends the next focus starts by itself.
-    "Stop Pomodoro" ends the session. The countdown is the screen while it runs
-    (switch away with "show time" / "show face", back with "show timer"). The session
-    survives a restart.
+    focus ... Each period starts the next one by itself (the alarm only announces it).
+    "Extend 10 minutes" adds time to the current period (focus or break). "Pause the
+    Pomodoro" / "resume (continue) the Pomodoro" keep the period and its remaining
+    time (the colon blinks while paused). "Stop Pomodoro" ends the session. The
+    countdown is the screen while it runs (switch away with "show time" / "show face",
+    back with "show timer"). The session survives a restart.
   - **Stopwatch** (counts up, MM:SS): "start stopwatch" (or "start the timer"),
     "pause stopwatch", "resume stopwatch", "stop / end stopwatch" (or "stop the
     timer"), "show stopwatch". The colon blinks while it is paused.
-- **Alarms stop by themselves after 20 seconds.**
+- **Alarms**: each ring lasts 20 seconds. An alarm nobody answers rings again after 10
+  minutes, three rings in all. Saying "Alexa" over the ring stops it and the device
+  goes back to standby (timers keep listening, e.g. for "extend 10 minutes").
+- **Command mode vs conversation**: after a device action through the AI (alarm,
+  timer, lamp, screen...) the device goes back to standby once the reply is spoken;
+  questions keep the conversation open for a follow-up.
+- **Listening timeout**: when nobody speaks, the server's spoken goodbye is cut off
+  and the device plays a short falling "done" beep (the wake sound in reverse) instead.
+- **Interrupting**: "Alexa" while the assistant speaks stops the reply at once, plays
+  the wake sound and listens. The wake word is a little more sensitive while the
+  device speaks or an alarm rings (model default otherwise).
 - **Wake sound at once**: the popup plays the moment "Alexa" is detected, before the
   server connection opens.
 - **"Show timer" / "show countdown" / "timer dikhao"**: shows the countdown of the
