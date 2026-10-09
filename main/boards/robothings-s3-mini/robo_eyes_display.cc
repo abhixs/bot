@@ -514,6 +514,10 @@ void RoboEyesDisplay::SetChatMessage(const char* role, const char* content) {
         if (on_user_speech_) on_user_speech_(content != nullptr ? content : "");
         return;
     }
+    if (role != nullptr && strcmp(role, "assistant") == 0 && content != nullptr &&
+        content[0] != '\0' && on_assistant_sentence_) {
+        on_assistant_sentence_(content);
+    }
     // The face fills the screen, so only system messages (activation code,
     // errors) are shown, scrolling through the text strip for a while.
     if (content == nullptr || content[0] == '\0' || alarm_active_ || role == nullptr ||

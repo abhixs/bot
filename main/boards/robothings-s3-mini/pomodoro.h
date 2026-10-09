@@ -54,6 +54,8 @@ public:
 
     // AlarmManager ring hook (main task): the running period ended.
     void HandleRing(const AlarmManager::RingInfo& info);
+    // Ends a session whose timer was cancelled from outside (call regularly).
+    void CheckTimer();
 
 private:
     Pomodoro() = default;
@@ -67,6 +69,7 @@ private:
     Phase phase_ = Phase::Focus;
     int timer_id_ = 0;
     int focus_seconds_ = kFocusSeconds;
+    int64_t missing_since_us_ = 0;
     std::function<void(Phase)> on_phase_start_;
     std::function<void()> on_end_;
 };

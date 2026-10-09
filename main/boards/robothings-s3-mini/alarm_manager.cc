@@ -69,6 +69,7 @@ void AlarmManager::Initialize() {
 
 void AlarmManager::Load() {
     Settings settings(kNvsNamespace, false);
+    next_id_ = std::max(1, static_cast<int>(settings.GetInt("next_id", 1)));
     std::string json = settings.GetString(kNvsKey, "[]");
     cJSON* root = cJSON_Parse(json.c_str());
     if (!cJSON_IsArray(root)) {
@@ -96,6 +97,8 @@ void AlarmManager::Load() {
         alarm.fire_at = static_cast<int64_t>(fire_at->valuedouble);
         alarm.is_timer = cJSON_IsTrue(cJSON_GetObjectItem(item, "t"));
         alarm.lamp = cJSON_IsTrue(cJSON_GetObjectItem(item, "l"));
+        cJSON* created = cJSON_GetObjectItem(item, "c");
+        if (cJSON_IsNumber(created)) alarm.created_at = static_cast<int64_t>(created->valuedouble);
         cJSON* label = cJSON_GetObjectItem(item, "n");
         if (cJSON_IsString(label)) {
             alarm.label = label->valuestring;
@@ -119,6 +122,7 @@ void AlarmManager::SaveLocked() {
         cJSON_AddBoolToObject(item, "t", alarm.is_timer);
         cJSON_AddBoolToObject(item, "l", alarm.lamp);
         cJSON_AddStringToObject(item, "n", alarm.label.c_str());
+        cJSON_AddNumberToObject(item, "c", static_cast<double>(alarm.created_at));
         cJSON_AddItemToArray(root, item);
     }
     char* json = cJSON_PrintUnformatted(root);
@@ -131,10 +135,14 @@ void AlarmManager::SaveLocked() {
 }
 
 int AlarmManager::NextIdLocked() {
-    int id = 1;
+    int id = next_id_;
     for (const auto& alarm : alarms_) {
         id = std::max(id, alarm.id + 1);
     }
+    if (id > 1000000) id = 1;  // practically never
+    next_id_ = id + 1;
+    Settings settings(kNvsNamespace, true);
+    settings.SetInt("next_id", next_id_);
     return id;
 }
 
@@ -223,6 +231,7 @@ void AlarmManager::RegisterTools() {
             alarm.label = properties["label"].value<std::string>();
             alarm.lamp = properties["turn_on_lamp"].value<bool>();
             alarm.fire_at = alarm_schedule::NextOccurrence(now, alarm.hour, alarm.minute, days);
+            alarm.created_at = static_cast<int64_t>(now);
             {
                 std::lock_guard<std::mutex> lock(mutex_);
                 if (static_cast<int>(alarms_.size()) >= kMaxAlarms) {
@@ -276,6 +285,7 @@ void AlarmManager::RegisterTools() {
             Alarm alarm;
             alarm.is_timer = true;
             alarm.fire_at = static_cast<int64_t>(now) + total;
+            alarm.created_at = static_cast<int64_t>(now);
             alarm.label = properties["label"].value<std::string>();
             {
                 std::lock_guard<std::mutex> lock(mutex_);
@@ -390,6 +400,12 @@ void AlarmManager::CheckAlarms() {
                 ring.lamp = it->lamp;
                 ring.id = it->id;
                 ring.is_timer = it->is_timer;
+                const bool pomodoro = it->label.rfind("Pomodoro", 0) == 0;
+                ring.snooze_ok = !pomodoro &&
+                                 ((!it->is_timer && it->days != 0) ||
+                                  (it->created_at == 0 && !it->is_timer) ||
+                                  (it->created_at != 0 &&
+                                   it->fire_at - it->created_at >= kSnoozeMinLeadSeconds));
                 if (it->id == retry_timer_id_ && retry_timer_id_ != 0) {
                     // The snooze of an unanswered alarm: ring as that alarm again.
                     ring = retry_info_;
@@ -495,7 +511,7 @@ void AlarmManager::OnRingTimeout() {
     const RingInfo info = current_ring_;
     const int attempt = ring_attempt_;
     StopRinging(0);
-    if (info.is_timer || attempt >= kAlarmRings) {
+    if (!info.snooze_ok || attempt >= kAlarmRings) {
         ESP_LOGI(TAG, "Ring ended without an answer");
         return;
     }
@@ -531,6 +547,7 @@ void AlarmManager::StopRinging(int snooze_minutes) {
             snooze.id = NextIdLocked();
             snooze.is_timer = true;
             snooze.fire_at = static_cast<int64_t>(now) + snooze_minutes * 60;
+            snooze.created_at = static_cast<int64_t>(now);
             snooze.label = current_ring_.label.empty() ? std::string("Snooze") : current_ring_.label;
             alarms_.push_back(snooze);
             SaveLocked();
@@ -549,6 +566,7 @@ int AlarmManager::AddTimer(int seconds, const std::string& label) {
     Alarm alarm;
     alarm.is_timer = true;
     alarm.fire_at = static_cast<int64_t>(now) + seconds;
+    alarm.created_at = static_cast<int64_t>(now);
     alarm.label = label;
     {
         std::lock_guard<std::mutex> lock(mutex_);

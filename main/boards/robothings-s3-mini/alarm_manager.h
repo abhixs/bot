@@ -25,6 +25,7 @@ public:
         bool is_timer = false;
         bool lamp = false;    // switch the lamp relay on when it rings
         std::string label;
+        int64_t created_at = 0;  // when it was set (device local seconds; 0 = unknown)
     };
 
     struct RingInfo {
@@ -33,13 +34,17 @@ public:
         bool lamp = false;
         int id = 0;  // the alarm / timer that rings
         bool is_timer = false;
+        // Unanswered rings get snoozed: only for alarms / timers set an hour or more
+        // ahead (and repeating alarms), never for the Pomodoro.
+        bool snooze_ok = false;
     };
 
     static constexpr int kMaxAlarms = 10;
     static constexpr int kRingSeconds = 20;  // then it stops by itself
-    // An alarm (not a timer) nobody answers rings again: 3 rings, 10 minutes apart.
+    // A long alarm / timer nobody answers rings again: 3 rings, 10 minutes apart.
     static constexpr int kAlarmRings = 3;
     static constexpr int kAlarmRetrySeconds = 10 * 60;
+    static constexpr int kSnoozeMinLeadSeconds = 60 * 60;
     static constexpr int kMissedGraceSeconds = 10 * 60;
 
     static AlarmManager& GetInstance() {
@@ -108,6 +113,9 @@ private:
     int64_t last_added_us_ = 0;
     int last_added_seconds_ = 0;
     int last_added_id_ = 0;
+    // Ids are never reused (a stale id, e.g. kept by the Pomodoro, must not match a
+    // new timer). Saved with the list.
+    int next_id_ = 1;
     int ring_elapsed_ms_ = 0;
     int next_tone_ms_ = 0;    // only touched on the main task
     int next_toggle_ms_ = 0;  // only touched on the main task

@@ -3,6 +3,7 @@
 #include "settings.h"
 
 #include <esp_log.h>
+#include <esp_timer.h>
 
 #include <algorithm>
 
@@ -105,7 +106,9 @@ bool Pomodoro::Resume() {
 }
 
 void Pomodoro::HandleRing(const AlarmManager::RingInfo& info) {
-    if (!active_ || paused_ || !info.is_timer || info.id != timer_id_) {
+    // Only its own timers: a normal timer never starts a Pomodoro period.
+    if (!active_ || paused_ || !info.is_timer || info.id != timer_id_ ||
+        info.label.rfind("Pomodoro", 0) != 0) {
         return;
     }
     timer_id_ = 0;
@@ -114,6 +117,28 @@ void Pomodoro::HandleRing(const AlarmManager::RingInfo& info) {
         StartPhase(Phase::Break, kBreakSeconds);
     } else {
         StartPhase(Phase::Focus, focus_seconds_);
+    }
+}
+
+// A running session whose timer is gone (e.g. "cancel all timers"): it is over.
+// Called regularly; a short grace period covers the moment between the timer
+// ending and HandleRing() starting the next period.
+void Pomodoro::CheckTimer() {
+    if (!active_ || paused_) {
+        missing_since_us_ = 0;
+        return;
+    }
+    if (AlarmManager::GetInstance().HasTimer(timer_id_)) {
+        missing_since_us_ = 0;
+        return;
+    }
+    const int64_t now = esp_timer_get_time();
+    if (missing_since_us_ == 0) {
+        missing_since_us_ = now;
+    } else if (now - missing_since_us_ > 3 * 1000000LL) {
+        ESP_LOGI(TAG, "Its timer was cancelled: session over");
+        missing_since_us_ = 0;
+        Stop();
     }
 }
 

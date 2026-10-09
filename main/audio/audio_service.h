@@ -162,6 +162,10 @@ public:
     // Acoustic echo cancellation only while allowed (default: always), e.g. only
     // while the device itself plays something.
     void AllowEchoCancellation(bool allowed);
+    // Priority of the Opus encode/decode task (default 2). A board whose audio front
+    // end is busier (e.g. echo cancellation) can raise it so playback and uplink do
+    // not starve. Returns false before the service has started.
+    bool SetCodecTaskPriority(UBaseType_t priority);
 
 private:
     AudioCodec* codec_ = nullptr;

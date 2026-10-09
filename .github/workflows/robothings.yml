@@ -29,36 +29,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Jamendo client ID (from repository secret)
-        shell: bash
-        env:
-          JAMENDO_CLIENT_ID: ${{ secrets.JAMENDO_CLIENT_ID }}
-        run: |
-          ID=$(printf '%s' "$JAMENDO_CLIENT_ID" | tr -cd 'A-Za-z0-9')
-          if [ -n "$ID" ]; then
-            printf '#pragma once\n#define JAMENDO_CLIENT_ID "%s"\n' "$ID" > main/boards/robothings-s3-mini/jamendo_config.h
-            echo "- online music (Jamendo): enabled" >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "- online music (Jamendo): using the default client ID from the code" >> "$GITHUB_STEP_SUMMARY"
-          fi
-
-      - name: Build settings (wake word download mirrors)
-        shell: bash
-        run: |
-          OWNER="${{ github.repository_owner }}"
-          OWNER_LC=$(echo "$OWNER" | tr 'A-Z' 'a-z')
-          REPO="${{ github.event.repository.name }}"
-          URLS="https://cdn.jsdelivr.net/gh/$OWNER/$REPO@gh-pages/wakewords/;https://raw.githubusercontent.com/$OWNER/$REPO/gh-pages/wakewords/;https://$OWNER_LC.github.io/$REPO/wakewords/;https://fastly.jsdelivr.net/gh/$OWNER/$REPO@gh-pages/wakewords/"
-          printf '#pragma once\n#define WAKEWORD_ASSETS_URLS "%s"\n' "$URLS" \
-            > main/boards/robothings-s3-mini/robothings_build_config.h
-          cat main/boards/robothings-s3-mini/robothings_build_config.h
-
       - name: Build both display variants
         shell: bash
         run: |
           set -eo pipefail
           # On failure, surface the error lines as annotations (readable without logs).
-          trap 'grep -hE "error:|Error|FAILED|Traceback|skip " build*.log wake*.log 2>/dev/null | tail -15 | while IFS= read -r l; do echo "::error::$l"; done' ERR
+          trap 'grep -hE "error:|Error|FAILED|Traceback|skip " build*.log 2>/dev/null | tail -15 | while IFS= read -r l; do echo "::error::$l"; done' ERR
           source "$IDF_PATH/export.sh"
           OUT=robothings-firmware
           mkdir -p "$OUT"
@@ -80,9 +56,6 @@ jobs:
             test "$ASSETS" -le $((0x100000))
             echo "- $VARIANT: app $APP / $((0x2F0000)) bytes, assets $ASSETS / $((0x100000)) bytes" >> "$GITHUB_STEP_SUMMARY"
           done
-          # One assets image per wake word, for switching the wake word by voice.
-          python tools/wakeword-assets/make_wakeword_assets.py "$OUT/wakewords" 2>&1 | tee wakewords.log
-          echo "- wake words: $(python -c "import json;print(', '.join(w['name'] for w in json.load(open('$OUT/wakewords/index.json'))))")" >> "$GITHUB_STEP_SUMMARY"
           cp flasher/index.html flasher/manifest.json flasher/manifest-sh1106.json flasher/README.md "$OUT/"
           cp -r tools/music-server "$OUT/music-server"
           echo "- language: $LANGUAGE, wake word: $WAKE_WORD" >> "$GITHUB_STEP_SUMMARY"
