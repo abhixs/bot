@@ -121,10 +121,13 @@ private:
 
     // Conversation watcher (main task, every 50 ms): wake word sensitivity, the
     // inactivity ending and command mode.
-    static constexpr float kSpeakingWakeThreshold = 0.5f;
+    // WakeNet thresholds (the wn9_alexa model default is 0.64; lower = more sensitive).
+    static constexpr float kSpeakingWakeThreshold = 0.45f;
+    static constexpr float kStandbyWakeThreshold = 0.58f;
     esp_timer_handle_t conversation_timer_ = nullptr;
     DeviceState watched_state_ = kDeviceStateUnknown;
-    float applied_wake_threshold_ = 0.0f;
+    float applied_wake_threshold_ = -1.0f;
+    int aec_allowed_ = -1;  // last value sent (-1 = none yet)
     bool user_turn_seen_ = false;  // the user said something in this listening turn
     bool action_pending_ = false;  // a device action ran: close after its reply
     int64_t stopwatch_started_us_ = 0;
@@ -347,7 +350,7 @@ private:
             .skip_unhandled_events = true,
         };
         esp_timer_create(&args, &conversation_timer_);
-        esp_timer_start_periodic(conversation_timer_, 50 * 1000);
+        esp_timer_start_periodic(conversation_timer_, 100 * 1000);
     }
 
     void WatchConversation() {
@@ -355,11 +358,22 @@ private:
         auto& alarms = AlarmManager::GetInstance();
         const DeviceState state = app.GetDeviceState();
 
-        // Wake word: more sensitive only while an alarm rings or the assistant speaks
-        // (the speaker is next to the mic); the model default otherwise.
+        // Echo cancellation only while the device itself plays something (reply, alarm,
+        // music): it is the heaviest part of the audio front end, and with nothing
+        // playing it only takes CPU from the wake word and the speech encoder.
+        const bool playing = state == kDeviceStateSpeaking || alarms.IsRinging() ||
+                             state == kDeviceStateNotifying ||
+                             MusicPlayer::GetInstance().IsPlaying();
+        if (static_cast<int>(playing) != aec_allowed_) {
+            app.GetAudioService().AllowEchoCancellation(playing);
+            aec_allowed_ = playing ? 1 : 0;
+        }
+
+        // Wake word sensitivity: highest while an alarm rings or the assistant speaks
+        // (the speaker is next to the mic), a little above the model default in standby.
         const float threshold = alarms.IsRinging()               ? kRingingWakeThreshold
                                 : state == kDeviceStateSpeaking ? kSpeakingWakeThreshold
-                                                                : 0.0f;
+                                                                : kStandbyWakeThreshold;
         if (threshold != applied_wake_threshold_) {
             app.GetAudioService().SetWakeWordThreshold(threshold);
             applied_wake_threshold_ = threshold;

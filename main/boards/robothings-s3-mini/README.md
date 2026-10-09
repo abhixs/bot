@@ -69,8 +69,9 @@ Commands are recognised from their key words, so natural variations work.
   - **Stopwatch** (counts up, MM:SS): "start stopwatch" (or "start the timer"),
     "pause stopwatch", "resume stopwatch", "stop / end stopwatch" (or "stop the
     timer"), "show stopwatch". The colon blinks while it is paused.
-- **Alarms**: each ring lasts 20 seconds. An alarm nobody answers rings again after 10
-  minutes, three rings in all. Saying "Alexa" over the ring stops it and the device
+- **Alarms**: each ring lasts 20 seconds. An alarm nobody answers sets a 10-minute
+  snooze (its countdown shows on the screen) and then rings again, three rings in all
+  (the alarm and two snoozes). "Alexa, stop" during a snooze cancels it. Saying "Alexa" over the ring stops it and the device
   goes back to standby (timers keep listening, e.g. for "extend 10 minutes").
 - **Command mode vs conversation**: after a device action through the AI (alarm,
   timer, lamp, screen...) the device goes back to standby once the reply is spoken;
@@ -78,8 +79,8 @@ Commands are recognised from their key words, so natural variations work.
 - **Listening timeout**: when nobody speaks, the server's spoken goodbye is cut off
   and the device plays a short falling "done" beep (the wake sound in reverse) instead.
 - **Interrupting**: "Alexa" while the assistant speaks stops the reply at once, plays
-  the wake sound and listens. The wake word is a little more sensitive while the
-  device speaks or an alarm rings (model default otherwise).
+  the wake sound and listens. Wake word thresholds (wn9_alexa default 0.64): 0.45 while
+  the device speaks or an alarm rings, 0.58 in standby.
 - **Wake sound at once**: the popup plays the moment "Alexa" is detected, before the
   server connection opens.
 - **"Show timer" / "show countdown" / "timer dikhao"**: shows the countdown of the
@@ -106,6 +107,8 @@ Commands are recognised from their key words, so natural variations work.
   keeps a copy of what it plays (software playback reference) and the ESP-SR AFE
   removes the device's own sound from the microphone while it listens for the wake
   word. "Alexa" can then be heard over the alarm beep, music or the assistant's voice.
+  It runs only while the device plays something (reply, alarm, music): it is the
+  heaviest part of the audio front end and is not needed otherwise.
 - **Alarms / timers**: the beep (about 1 s) repeats every 3 s and the wake word is more
   sensitive while it rings. Say "Alexa" (or press any button) to stop it.
 - A clipping microphone (too loud / too close) is reported in the serial log.

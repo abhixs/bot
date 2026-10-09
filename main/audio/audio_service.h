@@ -159,6 +159,9 @@ public:
     // Wake word detection threshold (0.4 - 0.9999, lower is more sensitive); a value
     // <= 0 restores the model default.
     void SetWakeWordThreshold(float threshold);
+    // Acoustic echo cancellation only while allowed (default: always), e.g. only
+    // while the device itself plays something.
+    void AllowEchoCancellation(bool allowed);
 
 private:
     AudioCodec* codec_ = nullptr;

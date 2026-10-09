@@ -76,7 +76,7 @@ public:
     bool HasTimer(int id);
     // Adds seconds to a running timer (the soonest one when id is 0).
     bool ExtendTimer(int id, int seconds);
-    // Drops a scheduled re-ring of an unanswered alarm. Returns true if there was one.
+    // Drops the snooze of an unanswered alarm. Returns true if there was one.
     bool CancelPendingRing();
     // Seconds left on a timer, or -1 when there is no such timer.
     int TimerRemaining(int id);
@@ -116,10 +116,10 @@ private:
     std::function<void(const RingInfo&)> on_ring_start_;
     std::function<void(int)> on_timer_set_;
     std::function<void(const RingInfo&)> on_ring_answered_;
-    // Unanswered alarm: ring again later (guarded by mutex_; fired by CheckAlarms).
+    // Unanswered alarm: a 10-minute snooze timer (shown like any timer) that rings as
+    // the alarm again (retry_* guarded by mutex_).
     int ring_attempt_ = 1;  // main task
-    bool retry_pending_ = false;
-    int64_t retry_at_ = 0;  // device local seconds
+    int retry_timer_id_ = 0;
     int retry_attempt_ = 0;
     RingInfo retry_info_;
     std::function<void()> on_ring_stop_;

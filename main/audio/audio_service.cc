@@ -948,6 +948,12 @@ bool AudioService::InitializeAudioEngine() {
     return true;
 }
 
+void AudioService::AllowEchoCancellation(bool allowed) {
+    if (audio_engine_ != nullptr) {
+        audio_engine_->SetAecAllowed(allowed);
+    }
+}
+
 void AudioService::SetWakeWordThreshold(float threshold) {
     if (audio_engine_ != nullptr) {
         audio_engine_->SetWakeWordThreshold(threshold);
