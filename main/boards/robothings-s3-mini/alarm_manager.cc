@@ -97,6 +97,8 @@ void AlarmManager::Load() {
         alarm.fire_at = static_cast<int64_t>(fire_at->valuedouble);
         alarm.is_timer = cJSON_IsTrue(cJSON_GetObjectItem(item, "t"));
         alarm.lamp = cJSON_IsTrue(cJSON_GetObjectItem(item, "l"));
+        cJSON* created = cJSON_GetObjectItem(item, "c");
+        if (cJSON_IsNumber(created)) alarm.created_at = static_cast<int64_t>(created->valuedouble);
         cJSON* label = cJSON_GetObjectItem(item, "n");
         if (cJSON_IsString(label)) {
             alarm.label = label->valuestring;
@@ -120,6 +122,7 @@ void AlarmManager::SaveLocked() {
         cJSON_AddBoolToObject(item, "t", alarm.is_timer);
         cJSON_AddBoolToObject(item, "l", alarm.lamp);
         cJSON_AddStringToObject(item, "n", alarm.label.c_str());
+        cJSON_AddNumberToObject(item, "c", static_cast<double>(alarm.created_at));
         cJSON_AddItemToArray(root, item);
     }
     char* json = cJSON_PrintUnformatted(root);
@@ -228,6 +231,7 @@ void AlarmManager::RegisterTools() {
             alarm.label = properties["label"].value<std::string>();
             alarm.lamp = properties["turn_on_lamp"].value<bool>();
             alarm.fire_at = alarm_schedule::NextOccurrence(now, alarm.hour, alarm.minute, days);
+            alarm.created_at = static_cast<int64_t>(now);
             {
                 std::lock_guard<std::mutex> lock(mutex_);
                 if (static_cast<int>(alarms_.size()) >= kMaxAlarms) {
@@ -281,6 +285,7 @@ void AlarmManager::RegisterTools() {
             Alarm alarm;
             alarm.is_timer = true;
             alarm.fire_at = static_cast<int64_t>(now) + total;
+            alarm.created_at = static_cast<int64_t>(now);
             alarm.label = properties["label"].value<std::string>();
             {
                 std::lock_guard<std::mutex> lock(mutex_);
@@ -395,6 +400,11 @@ void AlarmManager::CheckAlarms() {
                 ring.lamp = it->lamp;
                 ring.id = it->id;
                 ring.is_timer = it->is_timer;
+                // Snooze only for an alarm set an hour or more ahead (or repeating, or
+                // saved by an older firmware without the time it was set).
+                ring.snooze_ok = !it->is_timer &&
+                                 (it->days != 0 || it->created_at == 0 ||
+                                  it->fire_at - it->created_at >= kSnoozeMinLeadSeconds);
                 if (it->id == retry_timer_id_ && retry_timer_id_ != 0) {
                     // The snooze of an unanswered alarm: ring as that alarm again.
                     ring = retry_info_;
@@ -490,9 +500,9 @@ void AlarmManager::RingTick() {
     });
 }
 
-// Nobody answered: stop, and for an alarm (not a timer) set a 10-minute snooze
-// timer (on screen like any timer) that rings as the alarm again, up to kAlarmRings
-// rings in all.
+// Nobody answered: stop, and for an alarm set an hour or more ahead set a 10-minute
+// snooze timer (on screen like any timer) that rings as the alarm again, up to
+// kAlarmRings rings in all. Timers and short alarms just stop.
 void AlarmManager::OnRingTimeout() {
     if (!ringing_) {
         return;
@@ -500,7 +510,7 @@ void AlarmManager::OnRingTimeout() {
     const RingInfo info = current_ring_;
     const int attempt = ring_attempt_;
     StopRinging(0);
-    if (info.is_timer || attempt >= kAlarmRings) {
+    if (!info.snooze_ok || attempt >= kAlarmRings) {
         ESP_LOGI(TAG, "Ring ended without an answer");
         return;
     }
@@ -536,6 +546,7 @@ void AlarmManager::StopRinging(int snooze_minutes) {
             snooze.id = NextIdLocked();
             snooze.is_timer = true;
             snooze.fire_at = static_cast<int64_t>(now) + snooze_minutes * 60;
+            snooze.created_at = static_cast<int64_t>(now);
             snooze.label = current_ring_.label.empty() ? std::string("Snooze") : current_ring_.label;
             alarms_.push_back(snooze);
             SaveLocked();
@@ -554,6 +565,7 @@ int AlarmManager::AddTimer(int seconds, const std::string& label) {
     Alarm alarm;
     alarm.is_timer = true;
     alarm.fire_at = static_cast<int64_t>(now) + seconds;
+    alarm.created_at = static_cast<int64_t>(now);
     alarm.label = label;
     {
         std::lock_guard<std::mutex> lock(mutex_);

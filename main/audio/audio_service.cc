@@ -948,6 +948,14 @@ bool AudioService::InitializeAudioEngine() {
     return true;
 }
 
+bool AudioService::SetOutputTaskPriority(UBaseType_t priority) {
+    if (audio_output_task_handle_ == nullptr) {
+        return false;
+    }
+    vTaskPrioritySet(audio_output_task_handle_, priority);
+    return true;
+}
+
 bool AudioService::SetCodecTaskPriority(UBaseType_t priority) {
     if (opus_codec_task_handle_ == nullptr) {
         return false;

@@ -12,11 +12,11 @@
 #include "music_player.h"
 #include "pomodoro.h"
 #include "popdown_sound.h"
+#include "robo_sounds.h"
 #include "robo_audio_codec.h"
 #include "robo_eyes_display.h"
 #include "stopwatch.h"
 #include "voice_shortcuts.h"
-#include "wake_word_switch.h"
 #include "wifi_board.h"
 
 #include <cJSON.h>
@@ -91,6 +91,7 @@ private:
         Silent,     // mute at once: whatever reply is on its way is not heard
         Quiet,      // just close it (nothing to silence; lets the wake sound finish)
         EndBeep,    // Silent, then the short "done listening" beep (inactivity)
+        Sound,      // Silent, then play standby_sound_ (e.g. an expression's sound)
     };
 
     i2c_master_bus_handle_t display_i2c_bus_ = nullptr;
@@ -133,11 +134,21 @@ private:
     bool action_pending_ = false;  // a device action ran: close after its reply
     int64_t stopwatch_started_us_ = 0;
     int64_t pomodoro_started_us_ = 0;
+    std::string_view standby_sound_;     // played when a StandbyStyle::Sound standby ends
+    bool let_ai_reply_ = false;          // set by RunShortcut: done, but the AI answers
+    std::string_view idle_sound_;        // played the next time the device is idle
+    // "I did not understand" replies: cut and replaced by a short "hm?".
+    int assistant_sentences_ = 0;        // since the user's last turn
+    bool short_sorry_ = false;           // the first sentence was a short "sorry, ..."
+    std::string first_sentence_;         // of the current reply
+    bool reply_cut_ = false;             // muted until the reply is over
+    int64_t reply_cut_us_ = 0;
 
     // Ends the conversation right away, without the assistant saying anything.
     // Silent / EndBeep keep the speaker muted until the device is back in standby.
-    void GoStandby(StandbyStyle style = StandbyStyle::Silent) {
+    void GoStandby(StandbyStyle style = StandbyStyle::Silent, std::string_view sound = {}) {
         standby_style_ = style;
+        standby_sound_ = sound;
         standby_requested_ = true;
         if (style != StandbyStyle::Quiet) {
             if (codec_ != nullptr) codec_->SetMuted(true);
@@ -179,6 +190,10 @@ private:
             if (standby_style_ == StandbyStyle::EndBeep && state == kDeviceStateIdle) {
                 app.PlaySound(PopDownOgg());  // "done listening"
             }
+            if (standby_style_ == StandbyStyle::Sound && !standby_sound_.empty() &&
+                state == kDeviceStateIdle) {
+                app.PlaySound(standby_sound_);
+            }
             return;
         }
         idle_since_us_ = 0;
@@ -198,14 +213,88 @@ private:
     // speech-to-text result so they act at once and the AI does not answer them.
     void HandleUserSpeech(const std::string& text) {
         user_turn_seen_ = true;
+        assistant_sentences_ = 0;
+        short_sorry_ = false;
         const VoiceCommand command = ParseVoiceCommand(text);
         if (command.type == VoiceShortcut::None) return;
+        let_ai_reply_ = false;
         if (!RunShortcut(command)) {
             return;  // does not apply right now (e.g. "stop" with nothing ringing): the AI answers
         }
         ESP_LOGI(TAG, "Voice shortcut: %s (%s)", VoiceShortcutName(command.type), text.c_str());
+        if (let_ai_reply_) {
+            action_pending_ = true;  // done; the AI confirms briefly, then standby
+            return;
+        }
+        if (command.type == VoiceShortcut::ShowExpression || command.type == VoiceShortcut::Sleep) {
+            // The face, then its little sound once the conversation is closed.
+            GoStandby(StandbyStyle::Sound,
+                      robo_sounds::ForExpression(command.type == VoiceShortcut::Sleep
+                                                     ? "sleeping"
+                                                     : command.expression));
+            return;
+        }
         // The command is done here: end the conversation silently.
         GoStandby();
+    }
+
+    // Every sentence the assistant starts to speak (main task). "I did not understand"
+    // replies are kept to one short sentence: a short first sentence ("Sorry, samajh
+    // nahi paayi.") is spoken and everything after it dropped; a long one is cut at
+    // once and replaced by a short "hm?". Listening goes on for the repeat.
+    void HandleAssistantSentence(const std::string& text) {
+        static constexpr size_t kShortSorryChars = 42;
+        const int index = assistant_sentences_++;
+        if (reply_cut_ || Application::GetInstance().GetDeviceState() != kDeviceStateSpeaking) {
+            return;
+        }
+        auto& app = Application::GetInstance();
+        if (index == 1 && short_sorry_) {
+            short_sorry_ = false;
+            ESP_LOGI(TAG, "Not-understood reply trimmed after its first sentence");
+            app.AbortSpeaking(kAbortReasonNone);
+            return;
+        }
+        if (index == 0) first_sentence_ = text;
+        // (a server may split "Arey sorry, | mujhe samajh nahi aaya..." at the comma)
+        const bool sorry = index == 0   ? IsNotUnderstoodReply(text)
+                           : index == 1 ? IsNotUnderstoodReply(first_sentence_ + " " + text)
+                                        : false;
+        if (!sorry) {
+            return;
+        }
+        size_t chars = 0;  // UTF-8 code points (Devanagari letters are 3 bytes)
+        for (unsigned char c : text) chars += (c & 0xC0) != 0x80;
+        if (index == 0 && chars <= kShortSorryChars) {
+            short_sorry_ = true;  // say it, then nothing more
+            return;
+        }
+        ESP_LOGI(TAG, "Not-understood reply cut: %s", text.c_str());
+        reply_cut_ = true;
+        reply_cut_us_ = esp_timer_get_time();
+        if (codec_ != nullptr) codec_->SetMuted(true);
+        app.GetAudioService().ResetDecoder();
+        app.AbortSpeaking(kAbortReasonNone);
+    }
+
+    static bool IsNotUnderstoodReply(const std::string& raw) {
+        std::string t;
+        for (unsigned char c : raw) t.push_back(c < 0x80 ? static_cast<char>(tolower(c)) : c);
+        auto has = [&t](const char* f) { return t.find(f) != std::string::npos; };
+        const bool understand = has("samajh") || has("samjh") || has("samaj") ||
+                                has("\xe0\xa4\xb8\xe0\xa4\xae\xe0\xa4\x9d") ||  // "समझ"
+                                has("understand") || has("catch that") || has("didn't get");
+        const bool negative = has("nahi") || has("nahin") || has("nai ") || has("na aaya") ||
+                              has("\xe0\xa4\xa8\xe0\xa4\xb9\xe0\xa5\x80\xe0\xa4\x82") ||  // "नहीं"
+                              has("n't") || has("not") || has("couldn") || has("unable");
+        const bool repeat = has("phir se") || has("fir se") || has("dobara") || has("repeat") ||
+                            has("say that again") || has("say it again");
+        // Only an apology about the user's words, not an answer that merely contains
+        // "samajh ... nahi" ("ye samajhna mushkil nahi hai").
+        const bool about_me = has("sorry") || has("maaf") || has("mujhe") || has("i didn") ||
+                              has("i did not") || has("i couldn") || has("i could not") ||
+                              has("\xe0\xa4\xae\xe0\xa5\x81\xe0\xa4\x9d\xe0\xa5\x87");  // "मुझे"
+        return (understand && negative && about_me) || (repeat && (understand || has("sorry")));
     }
 
     // Carries out a local voice shortcut. Returns false when it does not apply now.
@@ -222,6 +311,10 @@ private:
             case VoiceShortcut::Sleep:
                 if (eyes_display_ != nullptr) eyes_display_->HoldExpression("sleeping", 8);
                 return true;
+            case VoiceShortcut::ShowExpression:
+                // Long enough for the 4.5 s sound that plays once the chat is closed.
+                return eyes_display_ != nullptr && command.expression != nullptr &&
+                       eyes_display_->HoldExpression(command.expression, 8);
             case VoiceShortcut::TimeMode:
             case VoiceShortcut::EmotionMode:
             case VoiceShortcut::ToggleMode: {
@@ -287,6 +380,7 @@ private:
                 pomodoro_view_ = true;
                 pomodoro_started_us_ = esp_timer_get_time();
                 pomodoro.Start(command.seconds > 0 ? command.seconds : Pomodoro::kFocusSeconds);
+                let_ai_reply_ = true;  // "25 minutes ka timer set ho gaya hai."
                 return pomodoro.active();
             case VoiceShortcut::PomodoroStop:
                 if (!pomodoro.active()) return false;
@@ -360,11 +454,22 @@ private:
         const DeviceState state = app.GetDeviceState();
         // Opus encode/decode above the audio front end (3): at the default 2 it starved,
         // so the wake beep came late and cracked, the reply crackled and uplink speech
-        // frames were dropped (bad recognition).
+        // frames were dropped (bad recognition). The speaker output goes above both so
+        // the I2S never runs dry (crackle); it mostly waits on the DMA anyway.
         if (!codec_priority_set_) {
-            codec_priority_set_ = app.GetAudioService().SetCodecTaskPriority(5);
+            codec_priority_set_ = app.GetAudioService().SetCodecTaskPriority(5) &&
+                                  app.GetAudioService().SetOutputTaskPriority(6);
         }
         Pomodoro::GetInstance().CheckTimer();
+
+        // A cut "not understood" reply: unmute and say "hm?" once it is over.
+        if (reply_cut_ && (state != kDeviceStateSpeaking ||
+                           esp_timer_get_time() - reply_cut_us_ > 3 * 1000000LL)) {
+            reply_cut_ = false;
+            app.GetAudioService().ResetDecoder();
+            if (codec_ != nullptr) codec_->SetMuted(false);
+            app.PlaySound(robo_sounds::Huh());
+        }
 
         // Echo cancellation only while the device itself plays something (reply, alarm,
         // beep, music): it is the heaviest part of the audio front end, and with nothing
@@ -419,6 +524,10 @@ private:
                     !alarms.IsRinging()) {
                     // The listening ended with nothing said (server timeout, no goodbye).
                     app.PlaySound(PopDownOgg());
+                }
+                if (!idle_sound_.empty()) {
+                    app.PlaySound(idle_sound_);  // e.g. the sound of a requested expression
+                    idle_sound_ = {};
                 }
                 standby_requested_ = false;
                 action_pending_ = false;
@@ -558,7 +667,6 @@ private:
         // connection is up.
         Application::GetInstance().SetWakeSoundOnDetect(true);
         ClockSync::GetInstance().Initialize();  // keep the clock on IST
-        RegisterWakeWordTools();
 
         auto& music = MusicPlayer::GetInstance();
         music.OnNowPlaying([this](const std::string& title) {
@@ -619,6 +727,8 @@ private:
 
         if (eyes_display_ != nullptr) {
             eyes_display_->OnUserSpeech([this](const std::string& text) { HandleUserSpeech(text); });
+            eyes_display_->OnAssistantSentence(
+                [this](const std::string& text) { HandleAssistantSentence(text); });
             eyes_display_->SetCountdownProvider([]() {
                 const int seconds = AlarmManager::GetInstance().SecondsToNextTimer();
                 return seconds >= 0 ? seconds : Pomodoro::GetInstance().paused_remaining();
@@ -655,7 +765,10 @@ private:
                 if (!eyes_display_->HoldExpression(name, properties["seconds"].value<int>())) {
                     return std::unexpected(std::string("Unknown expression"));
                 }
-                return true;
+                idle_sound_ = robo_sounds::ForExpression(name.c_str());  // after the reply
+                return std::string(
+                    "{\"success\":true,\"note\":\"Shown with its sound. Reply with at most "
+                    "three words.\"}");
             });
         mcp.AddTool(
             "self.screen.set_mode",
@@ -698,19 +811,24 @@ private:
         mcp.AddTool(
             "self.pomodoro.start",
             "Start a continuous Pomodoro session: focus (default 25 min) -> break (5 min) -> "
-            "focus -> ... until stopped. The countdown shows on the screen. Use for 'set "
-            "pomodoro timer', 'start pomodoro'. Do not also call self.alarm.set_timer.",
+            "focus -> ... until stopped. The countdown shows on the screen. Use ONLY when the "
+            "user says the word 'pomodoro' ('set pomodoro timer', 'start pomodoro'); any other "
+            "timer is self.alarm.set_timer. Do not also call self.alarm.set_timer. After "
+            "it, reply ONLY with the 'say' text of the result, nothing more.",
             PropertyList({Property("focus_minutes", kPropertyTypeInteger, 25, 1, 120)}),
             [this](const PropertyList& properties) -> ToolResult {
                 NoteDeviceAction();
                 auto& pomodoro = Pomodoro::GetInstance();
-                if (pomodoro.active() && esp_timer_get_time() - pomodoro_started_us_ < 15000000LL) {
-                    return std::string("{\"success\":true,\"note\":\"already started\"}");
+                const int minutes = properties["focus_minutes"].value<int>();
+                if (!(pomodoro.active() &&
+                      esp_timer_get_time() - pomodoro_started_us_ < 15000000LL)) {
+                    pomodoro_view_ = true;
+                    pomodoro_started_us_ = esp_timer_get_time();
+                    pomodoro.Start(minutes * 60);  // (already started by the voice shortcut)
                 }
-                pomodoro_view_ = true;
-                pomodoro_started_us_ = esp_timer_get_time();
-                pomodoro.Start(properties["focus_minutes"].value<int>() * 60);
-                return pomodoro.active();
+                if (!pomodoro.active()) return std::unexpected(std::string("Could not start."));
+                return "{\"success\":true,\"say\":\"" + std::to_string(minutes) +
+                       " minutes ka timer set ho gaya hai.\"}";
             });
         mcp.AddTool(
             "self.pomodoro.extend",
@@ -790,8 +908,8 @@ private:
             "End the conversation immediately and go to standby WITHOUT saying anything. Call it "
             "(and do not reply at all) when the user says bye, bye bye, goodbye, chup raho, chup "
             "ho jao, so jao, stop talking or similar. Device style rule: keep replies short; if "
-            "you did not understand the user, answer only 'Sorry, nahi samajh paayi.' and "
-            "nothing else.",
+            "you did not understand the user, answer only 'Sorry, samajh nahi paayi. Fir se bolein.' "
+            "and nothing else.",
             PropertyList(), [this](const PropertyList&) -> ToolResult {
                 Application::GetInstance().Schedule([this]() { GoStandby(); });
                 return true;

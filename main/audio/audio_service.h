@@ -166,6 +166,8 @@ public:
     // end is busier (e.g. echo cancellation) can raise it so playback and uplink do
     // not starve. Returns false before the service has started.
     bool SetCodecTaskPriority(UBaseType_t priority);
+    // Priority of the speaker output task (default 4), same idea.
+    bool SetOutputTaskPriority(UBaseType_t priority);
 
 private:
     AudioCodec* codec_ = nullptr;

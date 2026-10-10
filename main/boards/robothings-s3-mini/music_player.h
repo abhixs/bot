@@ -1,10 +1,7 @@
-// Music for the RoboThings S3 Mini, from two sources:
-//
-// 1. The user's own library: tools/music-server/robothings_music_server.py runs on
-//    a PC in the same Wi-Fi, indexes a folder of songs and streams them as Opus/Ogg
-//    (24 kHz mono, 60 ms frames) into the normal decode queue. Found by UDP broadcast.
-// 2. Jamendo (free, legal music by independent artists) straight from the internet:
-//    the device searches the Jamendo API and decodes the MP3 stream itself.
+// Music for the RoboThings S3 Mini from the user's own library:
+// tools/music-server/robothings_music_server.py runs on a PC in the same Wi-Fi,
+// indexes a folder of songs and streams them as Opus/Ogg (24 kHz mono, 60 ms
+// frames) into the normal decode queue. Found by UDP broadcast.
 //
 // While music plays the device stays idle, so the wake word still works: saying
 // "Alexa" pauses the song, and it resumes after the conversation unless the user
@@ -31,9 +28,7 @@ public:
     struct Track {
         std::string id;
         std::string title;
-        std::string album;   // library: folder name; online: artist
-        std::string url;     // online only: MP3 stream URL
-        bool online = false;
+        std::string album;   // folder name
     };
 
     static MusicPlayer& GetInstance() {
@@ -67,12 +62,6 @@ private:
     std::optional<Track> RandomTrack(const std::string& exclude_id);
     std::string BaseUrl() const;
 
-    // Jamendo
-    bool HasJamendo() const;
-    std::optional<std::vector<Track>> SearchOnline(const std::string& query, const std::string& genre,
-                                                   int offset, int limit);
-    std::optional<Track> NextOnline();
-
     // Playback
     void Request(const Track& track, uint32_t start_ms, bool shuffle);
     enum class StreamResult { kFinished, kInterrupted, kCancelled, kError };
@@ -80,9 +69,6 @@ private:
                              uint32_t& position_ms);
     StreamResult StreamOpus(const Track& track, uint32_t start_ms, uint32_t generation,
                             uint32_t& position_ms);
-    StreamResult StreamMp3(const Track& track, uint32_t start_ms, uint32_t generation,
-                           uint32_t& position_ms);
-    std::unique_ptr<Http> OpenUrl(std::string url, const std::string& range, int timeout_ms);
     void FinishStream(StreamResult result, uint32_t generation, uint32_t& position_ms);
     bool WaitForIdle(uint32_t generation, bool fresh_request);
     bool WaitUntilIdleAgain(uint32_t generation);
@@ -107,11 +93,6 @@ private:
     // Last song and where it stopped, for "resume" / "next".
     Track last_track_;
     uint32_t last_position_ms_ = 0;
-
-    // Online "radio": keep playing more results of the last online search.
-    std::string online_query_;
-    std::string online_genre_;
-    int online_offset_ = 0;
 
     std::function<void(const std::string&)> on_now_playing_;
     std::function<void()> on_stopped_;
