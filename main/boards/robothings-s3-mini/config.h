@@ -7,8 +7,12 @@
 // INMP441 mic, MAX98357A amp, SSD1306 128x64 OLED, 4 buttons, lamp relay.
 // Same wiring as the original Xiaozhi-Esp32s3mini firmware.
 
+// Microphone and speaker share one I2S port and clock (see robo_audio_codec.h), so
+// both run at 16 kHz. The pins below stay as they were: the shared clock is sent out
+// on the speaker pins AND the microphone clock pins, so the microphone works whether
+// its SCK / WS go to GPIO 5 / 4 (original wiring) or to GPIO 2 / 3 (joined).
 #define AUDIO_INPUT_SAMPLE_RATE  16000
-#define AUDIO_OUTPUT_SAMPLE_RATE 24000
+#define AUDIO_OUTPUT_SAMPLE_RATE 16000
 
 // 如果使用 Duplex I2S 模式，请注释下面一行
 #define AUDIO_I2S_METHOD_SIMPLEX

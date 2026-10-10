@@ -1,6 +1,11 @@
 // I2S codec for the RoboThings S3 Mini: INMP441 microphone + MAX98357A amplifier
-// (NoAudioCodecSimplex), extended with
+// on ONE I2S port (NoAudioCodecDuplex, 16 kHz both ways), extended with
 //
+// - one shared clock: the speaker's BCLK / LRCK are also sent out on the old
+//   microphone SCK / WS pins, so the microphone runs on exactly the speaker's
+//   clock whether it is wired to those pins or to the speaker's (or both, joined).
+//   Two separate I2S clocks fought each other once the pins were joined (heavy
+//   crackle), and drifted apart otherwise (poor echo cancellation);
 // - a software playback reference: the MAX98357A cannot loop its output back, so
 //   the samples sent to the speaker are kept, resampled to 16 kHz and handed to the
 //   AFE as the "R" channel next to the microphone ("MR"). That lets the AFE echo
@@ -19,7 +24,7 @@
 #include <mutex>
 #include <vector>
 
-class RoboAudioCodec : public NoAudioCodecSimplex {
+class RoboAudioCodec : public NoAudioCodecDuplex {
 public:
     RoboAudioCodec(int input_sample_rate, int output_sample_rate, gpio_num_t spk_bclk,
                    gpio_num_t spk_ws, gpio_num_t spk_dout, gpio_num_t mic_sck, gpio_num_t mic_ws,
@@ -30,6 +35,8 @@ public:
 protected:
     int Write(const int16_t* data, int samples) override;
     int Read(int16_t* dest, int samples) override;
+    // The microphone needs the speaker's clock: output stays on while input is on.
+    void EnableInput(bool enable) override;
 
 private:
     // Reference ring indexed by absolute time in 16 kHz samples (1 s long). The
@@ -38,9 +45,8 @@ private:
     // them, so slots that were never written read as silence.
     static constexpr int kRefRate = 16000;
     static constexpr int kRingSize = kRefRate;
-    // Output DMA queue (6 x 240 frames at 24 kHz = 60 ms) in 16 kHz samples.
-    static constexpr int64_t kOutputQueue = (AUDIO_CODEC_DMA_DESC_NUM * AUDIO_CODEC_DMA_FRAME_NUM) *
-                                            kRefRate / 24000;
+    // Output DMA queue (6 x 240 frames = 90 ms at 16 kHz) in 16 kHz samples.
+    int64_t output_queue_ = 0;
     // Let the reference lead the echo a little: the echo canceller handles a late
     // echo (up to its filter length) but not an early one.
     static constexpr int64_t kReferenceLead = kRefRate * 15 / 1000;
@@ -69,6 +75,7 @@ private:
     int16_t peak_ = 0;
 
     static int64_t NowPos();
+    static void MirrorClock(gpio_num_t pin, int signal);
     void PushReference(const int16_t* data, int samples);
     void PopReference(int16_t* dest, int samples, int stride);
     void UpdateMicStats(const int16_t* mic, int samples);

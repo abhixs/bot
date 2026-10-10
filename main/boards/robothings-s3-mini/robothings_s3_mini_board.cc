@@ -88,10 +88,11 @@ class RoboThingsS3MiniBoard : public WifiBoard {
 private:
     // How GoStandby() ends a conversation.
     enum class StandbyStyle {
+        // Every style ends with the short "done" beep (PopDownOgg) once in standby.
         Silent,     // mute at once: whatever reply is on its way is not heard
         Quiet,      // just close it (nothing to silence; lets the wake sound finish)
-        EndBeep,    // Silent, then the short "done listening" beep (inactivity)
-        Sound,      // Silent, then play standby_sound_ (e.g. an expression's sound)
+        EndBeep,    // Silent (inactivity: the server's goodbye is not heard)
+        Sound,      // Silent, then also play standby_sound_ (e.g. an expression's sound)
     };
 
     i2c_master_bus_handle_t display_i2c_bus_ = nullptr;
@@ -107,7 +108,7 @@ private:
     int64_t last_toggle_us_ = 0;
 
     // WakeNet threshold while an alarm rings (0.4 - 0.9999, lower = more sensitive).
-    static constexpr float kRingingWakeThreshold = 0.45f;
+    static constexpr float kRingingWakeThreshold = 0.50f;
     // Timers shorter than this switch the screen to their countdown when set.
     static constexpr int kAutoCountdownSeconds = 31 * 60;
     // "Extend" without a number.
@@ -123,8 +124,8 @@ private:
     // Conversation watcher (main task, every 50 ms): codec priority, echo cancellation,
     // wake word sensitivity, the inactivity ending and command mode.
     // WakeNet thresholds (the wn9_alexa model default is 0.64; lower = more sensitive).
-    static constexpr float kSpeakingWakeThreshold = 0.45f;
-    static constexpr float kStandbyWakeThreshold = 0.58f;
+    static constexpr float kSpeakingWakeThreshold = 0.55f;
+    static constexpr float kStandbyWakeThreshold = 0.62f;
     esp_timer_handle_t conversation_timer_ = nullptr;
     DeviceState watched_state_ = kDeviceStateUnknown;
     float applied_wake_threshold_ = -1.0f;
@@ -187,12 +188,11 @@ private:
                 app.GetAudioService().ResetDecoder();
                 if (codec_ != nullptr) codec_->SetMuted(false);
             }
-            if (standby_style_ == StandbyStyle::EndBeep && state == kDeviceStateIdle) {
-                app.PlaySound(PopDownOgg());  // "done listening"
-            }
-            if (standby_style_ == StandbyStyle::Sound && !standby_sound_.empty() &&
-                state == kDeviceStateIdle) {
-                app.PlaySound(standby_sound_);
+            if (state == kDeviceStateIdle && !AlarmManager::GetInstance().IsRinging()) {
+                app.PlaySound(PopDownOgg());  // every standby ends with the "done" beep
+                if (standby_style_ == StandbyStyle::Sound && !standby_sound_.empty()) {
+                    app.PlaySound(standby_sound_);  // then e.g. the expression's sound
+                }
             }
             return;
         }
@@ -520,9 +520,11 @@ private:
                 }
                 break;
             case kDeviceStateIdle:
-                if (previous == kDeviceStateListening && !user_turn_seen_ && !our_standby &&
-                    !alarms.IsRinging()) {
-                    // The listening ended with nothing said (server timeout, no goodbye).
+                if ((previous == kDeviceStateListening || previous == kDeviceStateSpeaking) &&
+                    !our_standby && !alarms.IsRinging()) {
+                    // Any other way back to standby (server timeout or goodbye, button,
+                    // reply over): the same "done" beep. Our own standbys beep in
+                    // StandbyTick, once the speaker is unmuted.
                     app.PlaySound(PopDownOgg());
                 }
                 if (!idle_sound_.empty()) {

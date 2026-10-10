@@ -136,6 +136,12 @@ current time or date always call self.clock.get_time."*
 | Lamp relay IN | | GPIO 12 |
 | Status LED | | GPIO 21 |
 
+Microphone and speaker run on one I2S port with one clock (16 kHz). The firmware
+sends that clock on GPIO 2 / 3 (speaker BCLK / LRC) and also on GPIO 4 / 5, so the
+INMP441 may stay on GPIO 4 / 5, move to GPIO 2 / 3, or be joined to both. For a
+cleaner sound: put 470-1000 uF across the MAX98357A VIN / GND, and if it distorts
+when loud, lower its gain (GAIN pin to VIN = 6 dB; default floating = 9 dB).
+
 ## Flashing
 
 Open `index.html` from GitHub Pages (or any https host) in Chrome / Edge, or flash
