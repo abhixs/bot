@@ -168,6 +168,11 @@ public:
     bool SetCodecTaskPriority(UBaseType_t priority);
     // Priority of the speaker output task (default 4), same idea.
     bool SetOutputTaskPriority(UBaseType_t priority);
+    // Decode Opus straight at the codec's output rate (Opus' own band-limited
+    // resampling) instead of decoding at the stream rate and converting afterwards
+    // with the fast rate converter, which aliases when it downsamples (e.g. 24 kHz
+    // replies on a 16 kHz codec: audible noise on the voice). Default off.
+    void DecodeAtOutputRate(bool enable) { decode_at_output_rate_.store(enable); }
 
 private:
     AudioCodec* codec_ = nullptr;
@@ -186,7 +191,9 @@ private:
     int encoder_duration_ms_ = OPUS_FRAME_DURATION_MS;
     int encoder_frame_size_ = 0;
     int encoder_outbuf_size_ = 0;
-    int decoder_sample_rate_ = 0;
+    int decoder_sample_rate_ = 0;  // what the decoder outputs
+    int decoder_stream_rate_ = 0;  // what the packets were encoded at
+    std::atomic<bool> decode_at_output_rate_{false};
     int decoder_duration_ms_ = OPUS_FRAME_DURATION_MS;
     int decoder_frame_size_ = 0;
     DebugStatistics debug_statistics_;

@@ -61,6 +61,7 @@ void AudioService::Initialize(AudioCodec* codec) {
         ESP_LOGE(TAG, "Failed to create audio decoder, error code: %d", ret);
     } else {
         decoder_sample_rate_ = codec->output_sample_rate();
+        decoder_stream_rate_ = decoder_sample_rate_;
         decoder_duration_ms_ = OPUS_FRAME_DURATION_MS;
         decoder_frame_size_ = decoder_sample_rate_ / 1000 * OPUS_FRAME_DURATION_MS;
     }
@@ -570,7 +571,12 @@ void AudioService::OpusCodecTask() {
 }
 
 void AudioService::SetDecodeSampleRate(int sample_rate, int frame_duration) {
-    if (decoder_sample_rate_ == sample_rate && decoder_duration_ms_ == frame_duration) {
+    const int codec_rate = Board::GetInstance().GetAudioCodec()->output_sample_rate();
+    const bool opus_rate = codec_rate == 8000 || codec_rate == 12000 || codec_rate == 16000 ||
+                           codec_rate == 24000 || codec_rate == 48000;
+    const int output_rate = decode_at_output_rate_.load() && opus_rate ? codec_rate : sample_rate;
+    if (decoder_stream_rate_ == sample_rate && decoder_sample_rate_ == output_rate &&
+        decoder_duration_ms_ == frame_duration) {
         return;
     }
     std::unique_lock<std::mutex> decoder_lock(decoder_mutex_);
@@ -579,13 +585,14 @@ void AudioService::SetDecodeSampleRate(int sample_rate, int frame_duration) {
         opus_decoder_ = nullptr;
     }
     decoder_lock.unlock();
-    esp_opus_dec_cfg_t opus_dec_cfg = OPUS_DEC_CFG(sample_rate, frame_duration);
+    esp_opus_dec_cfg_t opus_dec_cfg = OPUS_DEC_CFG(output_rate, frame_duration);
     auto ret = esp_opus_dec_open(&opus_dec_cfg, sizeof(esp_opus_dec_cfg_t), &opus_decoder_);
     if (opus_decoder_ == nullptr) {
         ESP_LOGE(TAG, "Failed to create audio decoder, error code: %d", ret);
         return;
     }
-    decoder_sample_rate_ = sample_rate;
+    decoder_stream_rate_ = sample_rate;
+    decoder_sample_rate_ = output_rate;
     decoder_duration_ms_ = frame_duration;
     decoder_frame_size_ = decoder_sample_rate_ / 1000 * frame_duration;
 

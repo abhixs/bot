@@ -457,6 +457,9 @@ private:
         // frames were dropped (bad recognition). The speaker output goes above both so
         // the I2S never runs dry (crackle); it mostly waits on the DMA anyway.
         if (!codec_priority_set_) {
+            // 24 kHz replies decoded straight at 16 kHz by Opus: the fast converter
+            // aliased (noise on the voice) when it downsampled them.
+            app.GetAudioService().DecodeAtOutputRate(true);
             codec_priority_set_ = app.GetAudioService().SetCodecTaskPriority(5) &&
                                   app.GetAudioService().SetOutputTaskPriority(6);
         }
