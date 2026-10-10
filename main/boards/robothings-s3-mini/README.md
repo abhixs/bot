@@ -70,6 +70,10 @@ Commands are recognised from their key words, so natural variations work.
   - **Stopwatch** (counts up, MM:SS): "start stopwatch" (or "start the timer"),
     "pause stopwatch", "resume stopwatch", "stop / end stopwatch" (or "stop the
     timer"), "show stopwatch". The colon blinks while it is paused.
+  - **Ticking**: while a countdown or the stopwatch is on the screen and running (in
+    standby), a soft "tick ... tock" plays once per second. On by default; "turn off
+    the ticking sound" / "ticking sound off karo" and "ticking sound on karo" switch it
+    (saved).
 - **Alarms / timers**: each ring lasts 20 seconds. Only for an alarm set an hour or
   more ahead (and repeating alarms): when nobody answers, a 10-minute snooze starts
   (its countdown shows on the screen) and then it rings again, three rings in all (the

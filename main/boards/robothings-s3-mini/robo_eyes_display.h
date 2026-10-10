@@ -11,6 +11,7 @@
 #include <esp_lcd_panel_io.h>
 #include <esp_lcd_panel_ops.h>
 
+#include <atomic>
 #include <functional>
 #include <memory>
 #include <string>
@@ -79,6 +80,8 @@ public:
     void ClearCountdown();
     void SetDisplayTheme(DisplayTheme theme);
     DisplayTheme display_theme() const { return theme_; }
+    // What is on the screen right now (safe from any task).
+    DisplayScreen shown_screen() const { return shown_screen_.load(); }
 
     // Everything the user says (speech-to-text), for local voice shortcuts.
     void OnUserSpeech(std::function<void(const std::string&)> cb) { on_user_speech_ = std::move(cb); }
@@ -148,6 +151,7 @@ private:
     std::function<bool()> stopwatch_running_;
     void UpdateStopwatchFace(int elapsed_s);
     DisplayScreen screen_ = DisplayScreen::Eyes;
+    std::atomic<DisplayScreen> shown_screen_{DisplayScreen::Eyes};  // copy of screen_
     uint32_t state_since_ms_ = 0;  // when the device state last changed (lv_tick)
     // How long a listening turn first shows the "ready" (Sweet) face.
     static constexpr uint32_t kWakeFaceMs = 900;

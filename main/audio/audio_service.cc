@@ -412,19 +412,24 @@ void AudioService::AudioOutputTask() {
 void AudioService::OpusCodecTask() {
     while (true) {
         std::unique_lock<std::mutex> lock(audio_queue_mutex_);
-        audio_queue_cv_.wait(lock, [this]() {
+        auto ready = [this]() {
             return service_stopped_.load() || !audio_encode_queue_.empty() ||
-                   (!audio_decode_queue_.empty() &&
-                    audio_playback_queue_.size() < MAX_PLAYBACK_TASKS_IN_QUEUE) ||
-                   BridgeWantsEncodeLocked();
-        });
+                   DecodeReadyLocked() || BridgeWantsEncodeLocked();
+        };
+        while (!ready()) {
+            if (prebuffering_) {
+                // The jitter buffer ends on a packet count or a deadline: poll it.
+                audio_queue_cv_.wait_for(lock, std::chrono::milliseconds(20));
+            } else {
+                audio_queue_cv_.wait(lock);
+            }
+        }
         if (service_stopped_.load()) {
             break;
         }
 
         /* Decode the audio from decode queue */
-        if (!audio_decode_queue_.empty() &&
-            audio_playback_queue_.size() < MAX_PLAYBACK_TASKS_IN_QUEUE) {
+        if (DecodeReadyLocked()) {
             auto packet = std::move(audio_decode_queue_.front());
             audio_decode_queue_.pop_front();
             decode_in_flight_ = true;
@@ -656,11 +661,11 @@ void AudioService::PushTaskToEncodeQueue(AudioTaskType type, std::vector<int16_t
 bool AudioService::PushPacketToDecodeQueue(std::unique_ptr<AudioStreamPacket> packet, bool wait) {
     std::unique_lock<std::mutex> lock(audio_queue_mutex_);
     const uint32_t generation = playback_generation_;
-    if (audio_decode_queue_.size() >= MAX_DECODE_PACKETS_IN_QUEUE) {
+    if (audio_decode_queue_.size() >= decode_queue_limit_) {
         if (wait) {
             audio_queue_cv_.wait(lock, [this, generation]() {
                 return service_stopped_.load() || generation != playback_generation_ ||
-                       audio_decode_queue_.size() < MAX_DECODE_PACKETS_IN_QUEUE;
+                       audio_decode_queue_.size() < decode_queue_limit_;
             });
         } else {
             return false;
@@ -668,6 +673,11 @@ bool AudioService::PushPacketToDecodeQueue(std::unique_ptr<AudioStreamPacket> pa
     }
     if (service_stopped_.load() || generation != playback_generation_) {
         return false;
+    }
+    if (!wait && prebuffer_packets_ > 0 && IsPlaybackDrainedLocked()) {
+        // A stream starts from silence: let a few packets gather first.
+        prebuffering_ = true;
+        prebuffer_since_ = std::chrono::steady_clock::now();
     }
     playback_drained_notified_ = false;
     audio_decode_queue_.push_back(std::move(packet));
@@ -884,6 +894,7 @@ void AudioService::ResetDecoder() {
         audio_decode_queue_.clear();
         audio_playback_queue_.clear();
         audio_testing_queue_.clear();
+        prebuffering_ = false;
         notify_drained = MarkPlaybackDrainedLocked();
         audio_queue_cv_.notify_all();
     }
@@ -895,6 +906,36 @@ void AudioService::ResetDecoder() {
 bool AudioService::IsPlaybackDrainedLocked() const {
     return audio_decode_queue_.empty() && audio_playback_queue_.empty() && !decode_in_flight_ &&
            !output_in_flight_;
+}
+
+bool AudioService::DecodeReadyLocked() {
+    if (audio_decode_queue_.empty() || audio_playback_queue_.size() >= MAX_PLAYBACK_TASKS_IN_QUEUE) {
+        return false;
+    }
+    if (prebuffering_) {
+        const auto waited = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                std::chrono::steady_clock::now() - prebuffer_since_)
+                                .count();
+        if (static_cast<int>(audio_decode_queue_.size()) < prebuffer_packets_ &&
+            waited < prebuffer_max_wait_ms_) {
+            return false;
+        }
+        prebuffering_ = false;
+    }
+    return true;
+}
+
+void AudioService::SetDecodeQueueLimit(int ms) {
+    std::lock_guard<std::mutex> lock(audio_queue_mutex_);
+    const size_t packets = static_cast<size_t>(std::max(1, ms / OPUS_FRAME_DURATION_MS));
+    decode_queue_limit_ = std::min(packets, kAudioTestingPacketCapacity);
+}
+
+void AudioService::SetPlaybackPrebuffer(int packets, int max_wait_ms) {
+    std::lock_guard<std::mutex> lock(audio_queue_mutex_);
+    prebuffer_packets_ = std::max(0, packets);
+    prebuffer_max_wait_ms_ = std::max(0, max_wait_ms);
+    if (prebuffer_packets_ == 0) prebuffering_ = false;
 }
 
 bool AudioService::MarkPlaybackDrainedLocked() {

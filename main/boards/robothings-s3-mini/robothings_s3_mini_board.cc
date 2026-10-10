@@ -15,7 +15,9 @@
 #include "robo_sounds.h"
 #include "robo_audio_codec.h"
 #include "robo_eyes_display.h"
+#include "settings.h"
 #include "stopwatch.h"
+#include "tick_sound.h"
 #include "voice_shortcuts.h"
 #include "wifi_board.h"
 
@@ -144,6 +146,83 @@ private:
     std::string first_sentence_;         // of the current reply
     bool reply_cut_ = false;             // muted until the reply is over
     int64_t reply_cut_us_ = 0;
+
+    // Ticking: one soft tick per second while the countdown or stopwatch is on the
+    // screen and running, in standby only (not over a conversation or an alarm).
+    // On by default; switched by voice and saved (NVS "ticking"/"on").
+    bool ticking_enabled_ = true;
+    esp_timer_handle_t tick_timer_ = nullptr;
+    bool tick_running_ = false;   // the 1 s tick timer runs
+    bool tick_waiting_ = false;   // waiting for the shown seconds to change (alignment)
+    int tick_wait_value_ = -1;
+    bool tock_ = false;           // alternate "tick" / "tock"
+
+    void SetTicking(bool on) {
+        ticking_enabled_ = on;
+        Settings settings("ticking", true);
+        settings.SetBool("on", on);
+        ESP_LOGI(TAG, "Ticking sound %s", on ? "on" : "off");
+    }
+
+    void PlayTick() {
+        Application::GetInstance().PlaySound(tock_ ? TockOgg() : TickOgg());
+        tock_ = !tock_;
+    }
+
+    void StopTicking() {
+        if (tick_running_) esp_timer_stop(tick_timer_);
+        tick_running_ = false;
+        tick_waiting_ = false;
+    }
+
+    // Main task, from the conversation watcher (every 50 ms).
+    void UpdateTicking(DeviceState state) {
+        int value = -1;
+        bool want = false;
+        if (ticking_enabled_ && eyes_display_ != nullptr && state == kDeviceStateIdle &&
+            !AlarmManager::GetInstance().IsRinging()) {
+            const DisplayScreen screen = eyes_display_->shown_screen();
+            if (screen == DisplayScreen::Countdown) {
+                value = AlarmManager::GetInstance().SecondsToNextTimer();
+                want = value > 0;  // a running timer (a paused Pomodoro has none)
+            } else if (screen == DisplayScreen::Stopwatch) {
+                auto& stopwatch = Stopwatch::GetInstance();
+                value = stopwatch.ElapsedSeconds();
+                want = stopwatch.running();
+            }
+        }
+        if (!want) {
+            StopTicking();
+            return;
+        }
+        if (tick_running_) return;
+        if (!tick_waiting_) {
+            tick_waiting_ = true;  // start with the next change of the shown seconds
+            tick_wait_value_ = value;
+            return;
+        }
+        if (value == tick_wait_value_) return;
+        if (tick_timer_ == nullptr) {
+            esp_timer_create_args_t args = {
+                .callback =
+                    [](void* arg) {
+                        auto* self = static_cast<RoboThingsS3MiniBoard*>(arg);
+                        Application::GetInstance().Schedule([self]() {
+                            if (self->tick_running_) self->PlayTick();
+                        });
+                    },
+                .arg = this,
+                .dispatch_method = ESP_TIMER_TASK,
+                .name = "tick",
+                .skip_unhandled_events = true,
+            };
+            esp_timer_create(&args, &tick_timer_);
+        }
+        tick_waiting_ = false;
+        tick_running_ = true;
+        PlayTick();
+        esp_timer_start_periodic(tick_timer_, 1000 * 1000);
+    }
 
     // Ends the conversation right away, without the assistant saying anything.
     // Silent / EndBeep keep the speaker muted until the device is back in standby.
@@ -336,6 +415,10 @@ private:
                     return true;
                 }
                 return eyes_display_->ShowStopwatch();
+            case VoiceShortcut::TickingOn:
+            case VoiceShortcut::TickingOff:
+                SetTicking(command.type == VoiceShortcut::TickingOn);
+                return true;
             case VoiceShortcut::LightTheme:
             case VoiceShortcut::DarkTheme:
                 if (eyes_display_ == nullptr) return false;
@@ -460,10 +543,17 @@ private:
             // 24 kHz replies decoded straight at 16 kHz by Opus: the fast converter
             // aliased (noise on the voice) when it downsampled them.
             app.GetAudioService().DecodeAtOutputRate(true);
+            // Smooth replies: up to 5 s of a reply may wait for decoding (a burst
+            // beyond the default 1.2 s was dropped: missing words), and a reply starts
+            // once 4 packets (240 ms) are in or after 300 ms, so late packets do not
+            // break it into pieces.
+            app.GetAudioService().SetDecodeQueueLimit(5000);
+            app.GetAudioService().SetPlaybackPrebuffer(4, 300);
             codec_priority_set_ = app.GetAudioService().SetCodecTaskPriority(5) &&
                                   app.GetAudioService().SetOutputTaskPriority(6);
         }
         Pomodoro::GetInstance().CheckTimer();
+        UpdateTicking(state);
 
         // A cut "not understood" reply: unmute and say "hm?" once it is over.
         if (reply_cut_ && (state != kDeviceStateSpeaking ||
@@ -776,6 +866,17 @@ private:
                     "three words.\"}");
             });
         mcp.AddTool(
+            "self.screen.set_ticking",
+            "Turn the ticking sound of the countdown / stopwatch screen on or off (saved). Use "
+            "for 'turn off the ticking sound', 'ticking sound off karo', 'ticking on karo'.",
+            PropertyList({Property("enabled", kPropertyTypeBoolean)}),
+            [this](const PropertyList& properties) -> ToolResult {
+                NoteDeviceAction();
+                const bool on = properties["enabled"].value<bool>();
+                Application::GetInstance().Schedule([this, on]() { SetTicking(on); });
+                return true;
+            });
+        mcp.AddTool(
             "self.screen.set_mode",
             "Choose what the screen shows. Main modes (saved, kept after a restart): 'time' = "
             "big clock, also while talking; 'emotion' = animated eyes; 'toggle' = the other "
@@ -931,6 +1032,10 @@ public:
         InitializeSsd1306Display();
         InitializeButtons();
         InitializeTools();
+        {
+            Settings settings("ticking", false);
+            ticking_enabled_ = settings.GetBool("on", true);
+        }
         g_board = this;
         StartConversationWatcher();
     }

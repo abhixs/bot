@@ -36,6 +36,8 @@ enum class VoiceShortcut {
     ShowExpression, // "rone wala chehra dikhao", "excited ho ke dikhao" (expression)
     LightTheme,     // "light mode", "invert the screen", "make screen white"
     DarkTheme,      // "dark mode", "turn off light mode", "screen dark karo"
+    TickingOn,      // "ticking sound on karo", "turn on the ticking"
+    TickingOff,     // "turn off the ticking sound", "ticking sound off karo"
 };
 
 // Lower-case ASCII, punctuation (also the Devanagari danda) turned into spaces,

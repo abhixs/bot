@@ -336,6 +336,7 @@ DisplayScreen RoboEyesDisplay::ResolveScreen(DeviceState state, int countdown_s,
 
 // Swaps between the eyes and the dot-matrix face (clock / countdown).
 void RoboEyesDisplay::ShowScreen(DisplayScreen screen) {
+    shown_screen_.store(screen);
     if (screen == screen_ || eyes_ == nullptr || dot_clock_ == nullptr) {
         screen_ = screen;
         return;

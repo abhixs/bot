@@ -78,6 +78,16 @@ constexpr Words kExpressionWords = {"happy", "sad", "angry", "crying", "cry", "r
                                     "funny", "confused", "excited", "dukhi", "naraz", "cute",
                                     "रो", "गुस्सा", "खुश", "उदास"};
 
+// Ticking of the countdown / stopwatch screens ("ticking sound off karo")
+constexpr Words kTickWords = {"ticking", "tick", "ticks", "tik", "tic", "tock", "tiktik",
+                              "ticktick", "ticktock", "tiktok", "टिक", "टिकटिक", "टिकिंग"};
+constexpr Words kTickPhrases = {"clock sound", "clock sounds", "ghadi ki awaaz",
+                                "ghadi ki awaz", "ghadi ki aawaz", "घड़ी की आवाज"};
+constexpr Words kTickOffWords = {"off", "band", "bandh", "stop", "disable", "mute", "hatao",
+                                 "hata", "silent", "nahi", "mat", "बंद", "हटाओ", "नहीं", "ऑफ"};
+constexpr Words kTickOnWords = {"on", "chalu", "start", "enable", "shuru", "wapas", "unmute",
+                                "lagao", "ऑन", "चालू", "शुरू"};
+
 bool In(const std::string& word, Words set) {
     for (const char* w : set) {
         if (word == w) return true;
@@ -392,6 +402,13 @@ VoiceCommand ParseTimers(const Sentence& s) {
     return {};
 }
 
+VoiceShortcut ParseTicking(const Sentence& s) {
+    if (!s.Has(kTickWords) && !s.HasPhrase(kTickPhrases)) return VoiceShortcut::None;
+    if (s.Has(kTickOffWords)) return VoiceShortcut::TickingOff;
+    if (s.Has(kTickOnWords)) return VoiceShortcut::TickingOn;
+    return VoiceShortcut::None;  // e.g. "what is ticking": the AI answers
+}
+
 }  // namespace
 
 int ParseDuration(const std::string& normalized_text) {
@@ -450,6 +467,7 @@ VoiceCommand ParseVoiceCommand(const std::string& raw) {
     const Sentence s(text);
     if (s.size() == 0 || s.size() > kMaxShortcutWords) return {};
     if (auto r = ParseStandby(s); r != VoiceShortcut::None) return {r};
+    if (auto r = ParseTicking(s); r != VoiceShortcut::None) return {r};
     if (auto r = ParseTheme(s); r != VoiceShortcut::None) return {r};
     if (auto r = ParseExpression(s); r.type != VoiceShortcut::None) return r;
     if (s.Has(kStopwatchWords)) return ParseStopwatch(s);
@@ -464,6 +482,10 @@ const char* VoiceShortcutName(VoiceShortcut shortcut) {
     switch (shortcut) {
         case VoiceShortcut::Standby:
             return "standby";
+        case VoiceShortcut::TickingOn:
+            return "ticking on";
+        case VoiceShortcut::TickingOff:
+            return "ticking off";
         case VoiceShortcut::Sleep:
             return "sleep";
         case VoiceShortcut::TimeMode:

@@ -173,6 +173,13 @@ public:
     // with the fast rate converter, which aliases when it downsamples (e.g. 24 kHz
     // replies on a 16 kHz codec: audible noise on the voice). Default off.
     void DecodeAtOutputRate(bool enable) { decode_at_output_rate_.store(enable); }
+    // Streamed (server) audio: how much may wait for decoding before new packets are
+    // dropped (default 1.2 s; a burst beyond it loses words), and a jitter buffer:
+    // when playback starts from silence, decoding waits for `packets` packets or
+    // `max_wait_ms`, whichever comes first, so late packets do not cut the voice
+    // into pieces (default off). Local sounds are never delayed.
+    void SetDecodeQueueLimit(int ms);
+    void SetPlaybackPrebuffer(int packets, int max_wait_ms);
 
 private:
     AudioCodec* codec_ = nullptr;
@@ -220,6 +227,11 @@ private:
     FixedQueue<AudioTask, MAX_PLAYBACK_TASKS_IN_QUEUE> audio_playback_queue_;
     bool decode_in_flight_ = false;
     bool output_in_flight_ = false;
+    size_t decode_queue_limit_ = MAX_DECODE_PACKETS_IN_QUEUE;  // guarded by audio_queue_mutex_
+    int prebuffer_packets_ = 0;                                // 0 = no jitter buffer
+    int prebuffer_max_wait_ms_ = 0;
+    bool prebuffering_ = false;
+    std::chrono::steady_clock::time_point prebuffer_since_;
     bool playback_drained_notified_ = true;
     uint32_t playback_generation_ = 0;
     // For server AEC
@@ -263,6 +275,7 @@ private:
     void CheckAndUpdateAudioPowerState();
     bool IsPlaybackDrainedLocked() const;
     bool MarkPlaybackDrainedLocked();
+    bool DecodeReadyLocked();
 };
 
 #endif
