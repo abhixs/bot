@@ -311,12 +311,6 @@ void AfeAudioEngine::EnableDeviceAec(bool enable) {
     UpdateAecState();
 }
 
-void AfeAudioEngine::SetAecAllowed(bool allowed) {
-    if (aec_allowed_.exchange(allowed) != allowed) {
-        afe_control_dirty_ = true;  // applied by ProcessingTask
-    }
-}
-
 void AfeAudioEngine::SetWakeWordThreshold(float threshold) {
     wakenet_threshold_.store(threshold);
     wakenet_threshold_dirty_.store(true);
@@ -407,10 +401,8 @@ void AfeAudioEngine::ApplyAfeControls() {
         }
     }
     if (codec_->input_reference()) {
-        const bool enable_aec =
-            aec_allowed_.load() &&
-            ((bits & kWakeWordEnabled) ||
-             (device_aec_enabled_.load() && (bits & kVoiceProcessingEnabled)));
+        const bool enable_aec = (bits & kWakeWordEnabled) ||
+                                (device_aec_enabled_.load() && (bits & kVoiceProcessingEnabled));
         if (enable_aec) {
             afe_iface_->enable_aec(afe_data_);
         } else {

@@ -26,14 +26,11 @@ enum class VoiceShortcut {
     StopTimer,      // "stop the timer": the stopwatch, else a ringing alarm
     PomodoroStart,  // "set pomodoro timer", "pomodoro start karo" (seconds = focus, optional)
     PomodoroStop,   // "stop pomodoro", "pomodoro band karo"
-    PomodoroPause,  // "pause the pomodoro"
-    PomodoroResume, // "resume / continue the pomodoro"
     StopwatchStart, // "start stopwatch", "start the timer" (no duration)
     StopwatchPause, // "pause stopwatch", "pause"
     StopwatchResume,// "resume stopwatch", "resume"
     StopwatchStop,  // "stop stopwatch", "end stopwatch", "reset stopwatch"
     StopwatchShow,  // "show stopwatch"
-    ShowExpression, // "rone wala chehra dikhao", "excited ho ke dikhao" (expression)
     LightTheme,     // "light mode", "invert the screen", "make screen white"
     DarkTheme,      // "dark mode", "turn off light mode", "screen dark karo"
 };
@@ -45,7 +42,6 @@ std::string NormalizeSpeech(const std::string& text);
 struct VoiceCommand {
     VoiceShortcut type = VoiceShortcut::None;
     int seconds = 0;  // duration for TimerSet / Extend / PomodoroStart (0 = none given)
-    const char* expression = nullptr;  // ShowExpression: e.g. "crying"
 };
 
 VoiceCommand ParseVoiceCommand(const std::string& text);

@@ -214,58 +214,6 @@ int UnitSeconds(const std::string& w) {
     return 0;
 }
 
-// ---------------------------------------------------------------- expressions
-struct ExpressionWord {
-    const char* word;
-    const char* expression;  // self.screen.show_expression name
-};
-constexpr ExpressionWord kExpressionMap[] = {
-    {"rone", "crying"},     {"rona", "crying"},       {"roo", "crying"},      {"ro", "crying"},
-    {"rote", "crying"},     {"cry", "crying"},        {"crying", "crying"},   {"रोने", "crying"},
-    {"रो", "crying"},       {"sad", "sad"},           {"udaas", "sad"},       {"udas", "sad"},
-    {"dukhi", "sad"},       {"उदास", "sad"},          {"दुखी", "sad"},        {"happy", "happy"},
-    {"khush", "happy"},     {"khushi", "happy"},      {"smile", "happy"},     {"smiling", "happy"},
-    {"muskurao", "happy"},  {"खुश", "happy"},         {"excited", "excited"}, {"excite", "excited"},
-    {"एक्साइटेड", "excited"}, {"angry", "angry"},       {"gussa", "angry"},     {"gusse", "angry"},
-    {"gussewala", "angry"}, {"naraz", "angry"},       {"गुस्सा", "angry"},      {"गुस्से", "angry"},
-    {"surprised", "surprised"}, {"surprise", "surprised"}, {"hairan", "surprised"},
-    {"हैरान", "surprised"},  {"shocked", "shocked"},   {"shock", "shocked"},   {"sleepy", "sleeping"},
-    {"sleeping", "sleeping"}, {"neend", "sleeping"},  {"नींद", "sleeping"},    {"love", "in_love"},
-    {"pyar", "in_love"},    {"pyaar", "in_love"},     {"dil", "in_love"},     {"heart", "in_love"},
-    {"प्यार", "in_love"},     {"दिल", "in_love"},        {"wink", "wink"},        {"blush", "blush"},
-    {"sharma", "blush"},    {"sharmao", "blush"},     {"sharmana", "blush"},  {"शर्मा", "blush"},
-    {"confused", "confused"}, {"confuse", "confused"}, {"thinking", "thinking"}, {"soch", "thinking"},
-    {"socho", "thinking"},  {"sochte", "thinking"},   {"सोच", "thinking"},     {"annoyed", "annoyed"},
-    {"irritated", "annoyed"}, {"chidh", "annoyed"},   {"tease", "tease"},     {"naughty", "tease"},
-    {"masti", "tease"},     {"funny", "tease"},       {"curious", "curious"}, {"sweet", "sweet"},
-    {"cute", "sweet"},
-};
-constexpr Words kExpressionShowWords = {"dikhao", "dikha", "dikhaiye", "dikhado", "dikhaao", "show",
-                                        "banao", "bana", "banake", "face", "chehra", "expression",
-                                        "दिखाओ", "दिखा", "चेहरा", "बनाओ"};
-
-VoiceCommand ParseExpression(const Sentence& s) {
-    if (s.size() > 8 || !s.Has(kExpressionShowWords) || s.Has(kQuestionWords)) return {};
-    for (const auto& w : s.words()) {
-        for (const auto& e : kExpressionMap) {
-            if (w == e.word) {
-                VoiceCommand command;
-                command.type = VoiceShortcut::ShowExpression;
-                command.expression = e.expression;
-                return command;
-            }
-        }
-    }
-    // "aankh maaro" = wink
-    if (s.HasPhrase({"aankh maaro", "aankh maro", "आंख मारो"})) {
-        VoiceCommand command;
-        command.type = VoiceShortcut::ShowExpression;
-        command.expression = "wink";
-        return command;
-    }
-    return {};
-}
-
 bool HasDigit(const std::string& text) {
     return std::any_of(text.begin(), text.end(), [](unsigned char c) { return isdigit(c); });
 }
@@ -352,8 +300,6 @@ VoiceCommand ParseStopwatch(const Sentence& s) {
 }
 
 VoiceCommand ParsePomodoro(const Sentence& s) {
-    if (s.Has(kPauseWords)) return {VoiceShortcut::PomodoroPause};
-    if (s.Has(kResumeWords)) return {VoiceShortcut::PomodoroResume};
     if (s.Has(kStopWords)) return {VoiceShortcut::PomodoroStop};
     if (s.Has(kExtendWords)) return {VoiceShortcut::Extend, DurationOf(s)};
     if (s.Has(kShowWords) && !s.Has(kSetWords)) return {VoiceShortcut::TimerMode};
@@ -451,7 +397,6 @@ VoiceCommand ParseVoiceCommand(const std::string& raw) {
     if (s.size() == 0 || s.size() > kMaxShortcutWords) return {};
     if (auto r = ParseStandby(s); r != VoiceShortcut::None) return {r};
     if (auto r = ParseTheme(s); r != VoiceShortcut::None) return {r};
-    if (auto r = ParseExpression(s); r.type != VoiceShortcut::None) return r;
     if (s.Has(kStopwatchWords)) return ParseStopwatch(s);
     if (s.Has(kPomodoroWords)) return ParsePomodoro(s);
     if (auto r = ParseTimers(s); r.type != VoiceShortcut::None) return r;
@@ -486,10 +431,6 @@ const char* VoiceShortcutName(VoiceShortcut shortcut) {
             return "pomodoro start";
         case VoiceShortcut::PomodoroStop:
             return "pomodoro stop";
-        case VoiceShortcut::PomodoroPause:
-            return "pomodoro pause";
-        case VoiceShortcut::PomodoroResume:
-            return "pomodoro resume";
         case VoiceShortcut::StopwatchStart:
             return "stopwatch start";
         case VoiceShortcut::StopwatchPause:
@@ -500,8 +441,6 @@ const char* VoiceShortcutName(VoiceShortcut shortcut) {
             return "stopwatch stop";
         case VoiceShortcut::StopwatchShow:
             return "stopwatch show";
-        case VoiceShortcut::ShowExpression:
-            return "show expression";
         case VoiceShortcut::LightTheme:
             return "light theme";
         case VoiceShortcut::DarkTheme:

@@ -25,7 +25,6 @@ public:
         bool is_timer = false;
         bool lamp = false;    // switch the lamp relay on when it rings
         std::string label;
-        int64_t created_at = 0;  // when it was set (device local seconds; 0 = unknown)
     };
 
     struct RingInfo {
@@ -34,17 +33,10 @@ public:
         bool lamp = false;
         int id = 0;  // the alarm / timer that rings
         bool is_timer = false;
-        // Unanswered rings get snoozed: only for alarms / timers set an hour or more
-        // ahead (and repeating alarms), never for the Pomodoro.
-        bool snooze_ok = false;
     };
 
     static constexpr int kMaxAlarms = 10;
     static constexpr int kRingSeconds = 20;  // then it stops by itself
-    // A long alarm / timer nobody answers rings again: 3 rings, 10 minutes apart.
-    static constexpr int kAlarmRings = 3;
-    static constexpr int kAlarmRetrySeconds = 10 * 60;
-    static constexpr int kSnoozeMinLeadSeconds = 60 * 60;
     static constexpr int kMissedGraceSeconds = 10 * 60;
 
     static AlarmManager& GetInstance() {
@@ -58,10 +50,6 @@ public:
     // Called on the main task when an alarm starts / stops ringing.
     void OnRingStart(std::function<void(const RingInfo&)> cb) { on_ring_start_ = std::move(cb); }
     void OnRingStop(std::function<void()> cb) { on_ring_stop_ = std::move(cb); }
-    // Called on the main task when the wake word (or the talk button) stopped a ring.
-    void OnRingAnswered(std::function<void(const RingInfo&)> cb) {
-        on_ring_answered_ = std::move(cb);
-    }
     // Called on the main task when a timer is started by voice, with its length.
     void OnTimerSet(std::function<void(int seconds)> cb) { on_timer_set_ = std::move(cb); }
 
@@ -81,10 +69,6 @@ public:
     bool HasTimer(int id);
     // Adds seconds to a running timer (the soonest one when id is 0).
     bool ExtendTimer(int id, int seconds);
-    // Drops the snooze of an unanswered alarm. Returns true if there was one.
-    bool CancelPendingRing();
-    // Seconds left on a timer, or -1 when there is no such timer.
-    int TimerRemaining(int id);
 
 private:
     AlarmManager() = default;
@@ -96,8 +80,7 @@ private:
     void Load();
     void SaveLocked();
     void CheckAlarms();
-    void StartRinging(const RingInfo& info, int attempt = 1);
-    void OnRingTimeout();
+    void StartRinging(const RingInfo& info);
     void RingTick();
     int NextIdLocked();
     std::string ListJson();
@@ -113,9 +96,6 @@ private:
     int64_t last_added_us_ = 0;
     int last_added_seconds_ = 0;
     int last_added_id_ = 0;
-    // Ids are never reused (a stale id, e.g. kept by the Pomodoro, must not match a
-    // new timer). Saved with the list.
-    int next_id_ = 1;
     int ring_elapsed_ms_ = 0;
     int next_tone_ms_ = 0;    // only touched on the main task
     int next_toggle_ms_ = 0;  // only touched on the main task
@@ -123,12 +103,5 @@ private:
     RingInfo current_ring_;
     std::function<void(const RingInfo&)> on_ring_start_;
     std::function<void(int)> on_timer_set_;
-    std::function<void(const RingInfo&)> on_ring_answered_;
-    // Unanswered alarm: a 10-minute snooze timer (shown like any timer) that rings as
-    // the alarm again (retry_* guarded by mutex_).
-    int ring_attempt_ = 1;  // main task
-    int retry_timer_id_ = 0;
-    int retry_attempt_ = 0;
-    RingInfo retry_info_;
     std::function<void()> on_ring_stop_;
 };

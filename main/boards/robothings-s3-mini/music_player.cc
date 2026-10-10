@@ -6,10 +6,13 @@
 #include "demuxer/ogg_demuxer.h"
 #include "audio_codec.h"
 #include "mcp_server.h"
+#include "mp3_frame.h"
 #include "settings.h"
 
 #include <cJSON.h>
+#include <esp_ae_rate_cvt.h>
 #include <esp_log.h>
+#include <esp_mp3_dec.h>
 #include <esp_timer.h>
 #include <http.h>
 #include <lwip/inet.h>
@@ -25,6 +28,15 @@
 
 #define TAG "MusicPlayer"
 
+// Jamendo client ID. A JAMENDO_CLIENT_ID repository secret, if set, overrides this
+// default at build time (see .github/workflows/robothings.yml).
+#if __has_include("jamendo_config.h")
+#include "jamendo_config.h"
+#endif
+#ifndef JAMENDO_CLIENT_ID
+#define JAMENDO_CLIENT_ID "daf06771"
+#endif
+
 namespace {
 constexpr int kDiscoveryPort = 47123;
 constexpr const char* kNvsNamespace = "music";
@@ -32,6 +44,9 @@ constexpr int kStreamChunk = 1024;
 constexpr int64_t kStartWaitUs = 25LL * 1000000;    // wait for the AI to finish talking
 constexpr int64_t kResumeWaitUs = 180LL * 1000000;  // resume after a conversation
 constexpr uint32_t kRewindAfterPauseMs = 1500;      // audio that was queued when paused
+constexpr int kMp3BufferSize = 16 * 1024;
+constexpr int kMp3Kbps = 96;                       // Jamendo "mp31" streams
+constexpr const char* kJamendoApi = "https://api.jamendo.com/v3.0/tracks/";
 
 std::string UrlEncode(const std::string& text) {
     static const char* kHex = "0123456789ABCDEF";
@@ -63,7 +78,12 @@ MusicPlayer::Track TrackFromJson(const cJSON* item) {
 
 constexpr const char* kNoServerError =
     "The music server was not found on the Wi-Fi. Tell the user to start "
-    "robothings_music_server.py on their computer (connected to the same Wi-Fi) and try again.";
+    "robothings_music_server.py on their computer (connected to the same Wi-Fi) and try again. "
+    "For free online music you can use self.music.play_online instead.";
+constexpr const char* kNoJamendoError =
+    "Online music is not set up on this device (missing Jamendo client ID).";
+constexpr const char* kJamendoFailError =
+    "Could not reach the Jamendo music service. Check the internet connection and try again.";
 }  // namespace
 
 void MusicPlayer::Initialize() {
@@ -190,6 +210,83 @@ std::optional<MusicPlayer::Track> MusicPlayer::RandomTrack(const std::string& ex
     return track;
 }
 
+// ---------------------------------------------------------------- Jamendo
+
+bool MusicPlayer::HasJamendo() const { return JAMENDO_CLIENT_ID[0] != '\0'; }
+
+std::optional<std::vector<MusicPlayer::Track>> MusicPlayer::SearchOnline(const std::string& query,
+                                                                        const std::string& genre,
+                                                                        int offset, int limit) {
+    std::string url = std::string(kJamendoApi) + "?client_id=" + JAMENDO_CLIENT_ID +
+                      "&format=json&audioformat=mp31&limit=" + std::to_string(limit) +
+                      "&offset=" + std::to_string(offset);
+    if (!query.empty()) {
+        url += "&search=" + UrlEncode(query);
+    }
+    if (!genre.empty()) {
+        // Jamendo separates tags with '+' (OR search for fuzzytags).
+        std::string tags;
+        std::string word;
+        for (char c : genre + " ") {
+            if (c == ' ' || c == ',' || c == '+') {
+                if (!word.empty()) tags += (tags.empty() ? "" : "+") + UrlEncode(word);
+                word.clear();
+            } else {
+                word.push_back(c);
+            }
+        }
+        url += "&fuzzytags=" + tags;
+    }
+    if (query.empty()) {
+        url += "&order=popularity_month";
+    }
+
+    auto http = OpenUrl(url, "", 8000);
+    if (!http) {
+        return std::nullopt;
+    }
+    std::string body = http->ReadAll();
+    http->Close();
+
+    cJSON* root = cJSON_Parse(body.c_str());
+    cJSON* results = cJSON_GetObjectItem(root, "results");
+    if (!cJSON_IsArray(results)) {
+        cJSON_Delete(root);
+        return std::nullopt;
+    }
+    std::vector<Track> tracks;
+    cJSON* item = nullptr;
+    cJSON_ArrayForEach(item, results) {
+        const cJSON* id = cJSON_GetObjectItem(item, "id");
+        const cJSON* name = cJSON_GetObjectItem(item, "name");
+        const cJSON* artist = cJSON_GetObjectItem(item, "artist_name");
+        const cJSON* audio = cJSON_GetObjectItem(item, "audio");
+        if (!cJSON_IsString(audio) || audio->valuestring[0] == '\0') continue;
+        Track track;
+        track.online = true;
+        track.id = cJSON_IsString(id) ? id->valuestring : "";
+        track.title = cJSON_IsString(name) ? name->valuestring : "Unknown";
+        track.album = cJSON_IsString(artist) ? artist->valuestring : "";
+        track.url = audio->valuestring;
+        tracks.push_back(track);
+    }
+    cJSON_Delete(root);
+    return tracks;
+}
+
+std::optional<MusicPlayer::Track> MusicPlayer::NextOnline() {
+    online_offset_++;
+    auto results = SearchOnline(online_query_, online_genre_, online_offset_, 1);
+    if ((!results || results->empty()) && online_offset_ > 0) {
+        online_offset_ = 0;  // ran out of results: start the list again
+        results = SearchOnline(online_query_, online_genre_, online_offset_, 1);
+    }
+    if (!results || results->empty()) {
+        return std::nullopt;
+    }
+    return results->front();
+}
+
 // ---------------------------------------------------------------- MCP tools
 
 void MusicPlayer::RegisterTools() {
@@ -240,6 +337,41 @@ void MusicPlayer::RegisterTools() {
         });
 
     mcp.AddTool(
+        "self.music.play_online",
+        "Play free online music from Jamendo: legal music by independent artists in every genre "
+        "(English, instrumental, lofi, rock, pop, electronic, classical, relaxing...). Jamendo does "
+        "NOT have Bollywood or other famous label songs; use self.music.play (the user's own "
+        "library) for those. Use this when the user asks for online music, a genre or mood, or "
+        "just 'some music'. query: optional artist/title words. genre: optional tags such as "
+        "'lofi', 'chillout', 'rock', 'piano', 'jazz', 'workout'. More songs keep playing after "
+        "the first. Keep your reply short; music starts after it.",
+        PropertyList({
+            Property("query", kPropertyTypeString, std::string("")).SetMaxLength(80),
+            Property("genre", kPropertyTypeString, std::string("")).SetMaxLength(60),
+        }),
+        [this](const PropertyList& properties) -> ToolResult {
+            if (!HasJamendo()) return std::unexpected(std::string(kNoJamendoError));
+            std::string query = properties["query"].value<std::string>();
+            std::string genre = properties["genre"].value<std::string>();
+            auto results = SearchOnline(query, genre, 0, 1);
+            if (!results) return std::unexpected(std::string(kJamendoFailError));
+            if (results->empty()) {
+                return std::unexpected(std::string(
+                    "Nothing found on Jamendo for that. Try a genre such as lofi, rock or piano."));
+            }
+            online_query_ = query;
+            online_genre_ = genre;
+            online_offset_ = 0;
+            const Track& track = results->front();
+            Request(track, 0, true);
+            cJSON* result = cJSON_CreateObject();
+            cJSON_AddStringToObject(result, "playing", track.title.c_str());
+            cJSON_AddStringToObject(result, "artist", track.album.c_str());
+            cJSON_AddStringToObject(result, "source", "Jamendo");
+            return result;
+        });
+
+    mcp.AddTool(
         "self.music.search",
         "Search the user's own music library and list matching songs without playing them.",
         PropertyList({Property("query", kPropertyTypeString).SetMaxLength(80)}),
@@ -275,9 +407,12 @@ void MusicPlayer::RegisterTools() {
                     return result;
                 });
 
-    mcp.AddTool("self.music.next", "Skip to the next (random) song of the library.",
+    mcp.AddTool("self.music.next", "Skip to the next song (same source as the current one).",
                 PropertyList(), [this](const PropertyList&) -> ToolResult {
-                    auto next = RandomTrack(last_track_.id);
+                    auto next = last_track_.online ? NextOnline() : RandomTrack(last_track_.id);
+                    if (!next && last_track_.online) {
+                        return std::unexpected(std::string(kJamendoFailError));
+                    }
                     if (!next) return std::unexpected(std::string(kNoServerError));
                     Request(*next, 0, true);
                     cJSON* result = cJSON_CreateObject();
@@ -355,7 +490,7 @@ void MusicPlayer::TaskLoop() {
                 continue;
             }
             if (result == StreamResult::kFinished && shuffle_ && generation == generation_) {
-                auto next = RandomTrack(track.id);
+                auto next = track.online ? NextOnline() : RandomTrack(track.id);
                 if (!next) break;
                 track = *next;
                 position_ms = 0;
@@ -422,7 +557,8 @@ bool MusicPlayer::WaitUntilIdleAgain(uint32_t generation) {
 
 MusicPlayer::StreamResult MusicPlayer::StreamTrack(const Track& track, uint32_t start_ms,
                                                    uint32_t generation, uint32_t& position_ms) {
-    StreamResult result = StreamOpus(track, start_ms, generation, position_ms);
+    StreamResult result = track.online ? StreamMp3(track, start_ms, generation, position_ms)
+                                       : StreamOpus(track, start_ms, generation, position_ms);
     FinishStream(result, generation, position_ms);
     return result;
 }
@@ -444,6 +580,223 @@ void MusicPlayer::FinishStream(StreamResult result, uint32_t generation, uint32_
         }
         position_ms = position_ms > kRewindAfterPauseMs ? position_ms - kRewindAfterPauseMs : 0;
     }
+}
+
+std::unique_ptr<Http> MusicPlayer::OpenUrl(std::string url, const std::string& range,
+                                           int timeout_ms) {
+    // HttpClient does not follow redirects; CDN links often answer 301/302.
+    for (int hop = 0; hop < 4; hop++) {
+        auto http = Board::GetInstance().GetNetwork()->CreateHttp(0);
+        http->SetTimeout(timeout_ms);
+        http->SetHeader("User-Agent", "RoboThings-S3-Mini");
+        if (!range.empty()) {
+            http->SetHeader("Range", range);
+        }
+        if (!http->Open("GET", url)) {
+            return nullptr;
+        }
+        auto status = http->GetStatusCode();
+        if (!status) {
+            http->Close();
+            return nullptr;
+        }
+        if (*status == 200 || *status == 206) {
+            return http;
+        }
+        std::string location = http->GetResponseHeader("Location");
+        http->Close();
+        if ((*status == 301 || *status == 302 || *status == 303 || *status == 307 ||
+             *status == 308) &&
+            !location.empty()) {
+            if (location.rfind("http", 0) != 0) {
+                // Relative redirect: keep scheme and host of the current URL.
+                size_t host_end = url.find('/', url.find("//") + 2);
+                location = url.substr(0, host_end) + (location[0] == '/' ? "" : "/") + location;
+            }
+            url = location;
+            continue;
+        }
+        ESP_LOGW(TAG, "HTTP %d for %s", *status, url.c_str());
+        return nullptr;
+    }
+    return nullptr;
+}
+
+MusicPlayer::StreamResult MusicPlayer::StreamMp3(const Track& track, uint32_t start_ms,
+                                                 uint32_t generation, uint32_t& position_ms) {
+    auto& app = Application::GetInstance();
+    auto& audio = app.GetAudioService();
+    const int out_rate = Board::GetInstance().GetAudioCodec()->output_sample_rate();
+
+    // Resume by byte range (constant bitrate stream); the frame finder resyncs.
+    position_ms = start_ms;
+    std::string range;
+    if (start_ms > 0) {
+        range = "bytes=" + std::to_string(static_cast<uint64_t>(start_ms) * kMp3Kbps / 8) + "-";
+    }
+    auto http = OpenUrl(track.url, range, 10000);
+    if (!http) {
+        return StreamResult::kError;
+    }
+    if (start_ms > 0 && http->GetStatusCode().value_or(200) == 200) {
+        position_ms = 0;  // server ignored the range: starting from the top
+    }
+    ESP_LOGI(TAG, "Streaming online: %s - %s", track.title.c_str(), track.album.c_str());
+
+    void* decoder = nullptr;
+    if (esp_mp3_dec_open(nullptr, 0, &decoder) != ESP_AUDIO_ERR_OK || decoder == nullptr) {
+        http->Close();
+        return StreamResult::kError;
+    }
+    esp_ae_rate_cvt_handle_t resampler = nullptr;
+    int resampler_rate = 0;
+
+    std::vector<uint8_t> in(kMp3BufferSize);
+    size_t in_len = 0;
+    std::vector<uint8_t> pcm_bytes(1152 * 2 * sizeof(int16_t));
+    std::vector<int16_t> mono;
+    std::vector<int16_t> resampled;
+    std::vector<int16_t> pending;
+    const size_t push_samples = out_rate / 2;  // queue half a second at a time
+    pending.reserve(push_samples + 2048);
+
+    StreamResult result = StreamResult::kFinished;
+    bool eof = false;
+    bool push_failed = false;
+
+    auto push_pending = [&](bool force) {
+        if (pending.empty() || (!force && pending.size() < push_samples)) return;
+        if (!audio.PushPcmToPlaybackQueue(std::move(pending), true)) {
+            push_failed = true;
+        }
+        pending = std::vector<int16_t>();
+        pending.reserve(push_samples + 2048);
+    };
+
+    while (true) {
+        if (generation != generation_) {
+            result = StreamResult::kCancelled;
+            break;
+        }
+        if (app.GetDeviceState() != kDeviceStateIdle || push_failed) {
+            result = StreamResult::kInterrupted;
+            break;
+        }
+        // Top up the input buffer.
+        if (!eof && in_len < in.size()) {
+            auto n = http->Read(reinterpret_cast<char*>(in.data() + in_len), in.size() - in_len);
+            if (!n) {
+                ESP_LOGW(TAG, "Online stream read failed");
+                result = StreamResult::kError;
+                break;
+            }
+            if (*n == 0) {
+                eof = true;
+            } else {
+                in_len += *n;
+            }
+        }
+
+        // Decode every whole frame in the buffer.
+        size_t offset = 0;
+        while (offset < in_len && !push_failed) {
+            mp3::FrameInfo frame;
+            size_t skip = 0;
+            auto found = mp3::FindFrame(in.data() + offset, in_len - offset, frame, skip);
+            if (found == mp3::FindResult::kSkip) {
+                offset += std::min(skip, in_len - offset);
+                continue;
+            }
+            if (found == mp3::FindResult::kNeedMoreData) {
+                // At the very end there is no next header to confirm the last frame.
+                if (!(eof && in_len - offset >= 4 && mp3::ParseHeader(in.data() + offset, frame) &&
+                      in_len - offset >= frame.length)) {
+                    break;
+                }
+            }
+            esp_audio_dec_in_raw_t raw = {
+                .buffer = in.data() + offset,
+                .len = static_cast<uint32_t>(frame.length),
+                .consumed = 0,
+                .frame_recover = ESP_AUDIO_DEC_RECOVERY_NONE,
+            };
+            esp_audio_dec_out_frame_t out = {
+                .buffer = pcm_bytes.data(),
+                .len = static_cast<uint32_t>(pcm_bytes.size()),
+                .needed_size = 0,
+                .decoded_size = 0,
+            };
+            esp_audio_dec_info_t info = {};
+            esp_audio_err_t ret = esp_mp3_dec_decode(decoder, &raw, &out, &info);
+            if (ret == ESP_AUDIO_ERR_BUFF_NOT_ENOUGH && out.needed_size > pcm_bytes.size()) {
+                pcm_bytes.resize(out.needed_size);
+                continue;  // retry the same frame with a bigger buffer
+            }
+            offset += frame.length;
+            if (ret != ESP_AUDIO_ERR_OK || out.decoded_size == 0 || info.sample_rate == 0) {
+                continue;  // skip a damaged frame
+            }
+
+            // Down-mix to mono.
+            const int channels = std::max<int>(1, info.channel);
+            const size_t frames = out.decoded_size / sizeof(int16_t) / channels;
+            const int16_t* samples = reinterpret_cast<const int16_t*>(pcm_bytes.data());
+            mono.resize(frames);
+            for (size_t i = 0; i < frames; i++) {
+                int sum = 0;
+                for (int c = 0; c < channels; c++) sum += samples[i * channels + c];
+                mono[i] = static_cast<int16_t>(sum / channels);
+            }
+            position_ms += static_cast<uint32_t>(frames * 1000 / info.sample_rate);
+
+            // Resample to the speaker rate.
+            if (static_cast<int>(info.sample_rate) != out_rate) {
+                if (resampler == nullptr || resampler_rate != static_cast<int>(info.sample_rate)) {
+                    if (resampler != nullptr) esp_ae_rate_cvt_close(resampler);
+                    resampler = nullptr;
+                    esp_ae_rate_cvt_cfg_t cfg = {};
+                    cfg.src_rate = info.sample_rate;
+                    cfg.dest_rate = static_cast<uint32_t>(out_rate);
+                    cfg.channel = 1;
+                    cfg.bits_per_sample = ESP_AUDIO_BIT16;
+                    cfg.complexity = 2;
+                    cfg.perf_type = ESP_AE_RATE_CVT_PERF_TYPE_SPEED;
+                    esp_ae_rate_cvt_open(&cfg, &resampler);  // leaves nullptr on failure
+                    resampler_rate = info.sample_rate;
+                }
+                if (resampler == nullptr) continue;
+                uint32_t max_out = 0;
+                esp_ae_rate_cvt_get_max_out_sample_num(resampler, mono.size(), &max_out);
+                resampled.resize(max_out);
+                uint32_t produced = max_out;
+                esp_ae_rate_cvt_process(resampler, (esp_ae_sample_t)mono.data(), mono.size(),
+                                        (esp_ae_sample_t)resampled.data(), &produced);
+                pending.insert(pending.end(), resampled.begin(), resampled.begin() + produced);
+            } else {
+                pending.insert(pending.end(), mono.begin(), mono.end());
+            }
+            push_pending(false);
+        }
+        // Keep the unparsed tail.
+        if (offset > 0) {
+            memmove(in.data(), in.data() + offset, in_len - offset);
+            in_len -= offset;
+        }
+        if (eof && (in_len < 4 || offset == 0)) {
+            break;  // end of song (any leftover bytes are not a whole frame)
+        }
+    }
+    if (result == StreamResult::kFinished && !push_failed) {
+        push_pending(true);
+    }
+    if (push_failed && result == StreamResult::kFinished) {
+        result = StreamResult::kInterrupted;
+    }
+
+    http->Close();
+    esp_mp3_dec_close(decoder);
+    if (resampler != nullptr) esp_ae_rate_cvt_close(resampler);
+    return result;
 }
 
 MusicPlayer::StreamResult MusicPlayer::StreamOpus(const Track& track, uint32_t start_ms,

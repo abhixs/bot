@@ -2,7 +2,6 @@
 
 #include "alarm_schedule.h"
 #include "alarm_tone.h"
-#include "device_action.h"
 #include "application.h"
 #include "mcp_server.h"
 #include "settings.h"
@@ -69,7 +68,6 @@ void AlarmManager::Initialize() {
 
 void AlarmManager::Load() {
     Settings settings(kNvsNamespace, false);
-    next_id_ = std::max(1, static_cast<int>(settings.GetInt("next_id", 1)));
     std::string json = settings.GetString(kNvsKey, "[]");
     cJSON* root = cJSON_Parse(json.c_str());
     if (!cJSON_IsArray(root)) {
@@ -97,8 +95,6 @@ void AlarmManager::Load() {
         alarm.fire_at = static_cast<int64_t>(fire_at->valuedouble);
         alarm.is_timer = cJSON_IsTrue(cJSON_GetObjectItem(item, "t"));
         alarm.lamp = cJSON_IsTrue(cJSON_GetObjectItem(item, "l"));
-        cJSON* created = cJSON_GetObjectItem(item, "c");
-        if (cJSON_IsNumber(created)) alarm.created_at = static_cast<int64_t>(created->valuedouble);
         cJSON* label = cJSON_GetObjectItem(item, "n");
         if (cJSON_IsString(label)) {
             alarm.label = label->valuestring;
@@ -122,7 +118,6 @@ void AlarmManager::SaveLocked() {
         cJSON_AddBoolToObject(item, "t", alarm.is_timer);
         cJSON_AddBoolToObject(item, "l", alarm.lamp);
         cJSON_AddStringToObject(item, "n", alarm.label.c_str());
-        cJSON_AddNumberToObject(item, "c", static_cast<double>(alarm.created_at));
         cJSON_AddItemToArray(root, item);
     }
     char* json = cJSON_PrintUnformatted(root);
@@ -135,14 +130,10 @@ void AlarmManager::SaveLocked() {
 }
 
 int AlarmManager::NextIdLocked() {
-    int id = next_id_;
+    int id = 1;
     for (const auto& alarm : alarms_) {
         id = std::max(id, alarm.id + 1);
     }
-    if (id > 1000000) id = 1;  // practically never
-    next_id_ = id + 1;
-    Settings settings(kNvsNamespace, true);
-    settings.SetInt("next_id", next_id_);
     return id;
 }
 
@@ -213,7 +204,6 @@ void AlarmManager::RegisterTools() {
             Property("turn_on_lamp", kPropertyTypeBoolean, false),
         }),
         [this](const PropertyList& properties) -> ToolResult {
-            NoteDeviceAction();
             time_t now = time(nullptr);
             if (!alarm_schedule::IsTimeValid(now)) {
                 return std::unexpected(
@@ -231,7 +221,6 @@ void AlarmManager::RegisterTools() {
             alarm.label = properties["label"].value<std::string>();
             alarm.lamp = properties["turn_on_lamp"].value<bool>();
             alarm.fire_at = alarm_schedule::NextOccurrence(now, alarm.hour, alarm.minute, days);
-            alarm.created_at = static_cast<int64_t>(now);
             {
                 std::lock_guard<std::mutex> lock(mutex_);
                 if (static_cast<int>(alarms_.size()) >= kMaxAlarms) {
@@ -267,7 +256,6 @@ void AlarmManager::RegisterTools() {
             Property("label", kPropertyTypeString, std::string("")).SetMaxLength(40),
         }),
         [this](const PropertyList& properties) -> ToolResult {
-            NoteDeviceAction();
             time_t now = time(nullptr);
             if (!alarm_schedule::IsTimeValid(now)) {
                 return std::unexpected(
@@ -285,7 +273,6 @@ void AlarmManager::RegisterTools() {
             Alarm alarm;
             alarm.is_timer = true;
             alarm.fire_at = static_cast<int64_t>(now) + total;
-            alarm.created_at = static_cast<int64_t>(now);
             alarm.label = properties["label"].value<std::string>();
             {
                 std::lock_guard<std::mutex> lock(mutex_);
@@ -316,7 +303,6 @@ void AlarmManager::RegisterTools() {
             Property("id", kPropertyTypeInteger, -1, 100000),
         }),
         [this](const PropertyList& properties) -> ToolResult {
-            NoteDeviceAction();
             int id = properties["id"].value<int>();
             int removed = 0;
             {
@@ -351,7 +337,6 @@ void AlarmManager::RegisterTools() {
             Property("snooze_minutes", kPropertyTypeInteger, 0, 0, 30),
         }),
         [this](const PropertyList& properties) -> ToolResult {
-            NoteDeviceAction();
             if (!ringing_) {
                 return std::string("{\"success\":true,\"note\":\"no alarm is ringing\"}");
             }
@@ -383,7 +368,6 @@ void AlarmManager::CheckAlarms() {
     bool changed = false;
     bool have_ring = false;
     RingInfo ring;
-    int attempt = 1;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         for (auto it = alarms_.begin(); it != alarms_.end();) {
@@ -400,19 +384,6 @@ void AlarmManager::CheckAlarms() {
                 ring.lamp = it->lamp;
                 ring.id = it->id;
                 ring.is_timer = it->is_timer;
-                const bool pomodoro = it->label.rfind("Pomodoro", 0) == 0;
-                ring.snooze_ok = !pomodoro &&
-                                 ((!it->is_timer && it->days != 0) ||
-                                  (it->created_at == 0 && !it->is_timer) ||
-                                  (it->created_at != 0 &&
-                                   it->fire_at - it->created_at >= kSnoozeMinLeadSeconds));
-                if (it->id == retry_timer_id_ && retry_timer_id_ != 0) {
-                    // The snooze of an unanswered alarm: ring as that alarm again.
-                    ring = retry_info_;
-                    ring.id = it->id;
-                    attempt = retry_attempt_;
-                    retry_timer_id_ = 0;
-                }
             } else if (!on_time) {
                 ESP_LOGW(TAG, "Alarm %d missed (device was off or clock jumped)", it->id);
             }
@@ -430,15 +401,13 @@ void AlarmManager::CheckAlarms() {
     }
 
     if (have_ring) {
-        ESP_LOGI(TAG, "Ringing: %s %s (ring %d)", ring.title.c_str(), ring.label.c_str(), attempt);
-        Application::GetInstance().Schedule(
-            [this, ring, attempt]() { StartRinging(ring, attempt); });
+        ESP_LOGI(TAG, "Ringing: %s %s", ring.title.c_str(), ring.label.c_str());
+        Application::GetInstance().Schedule([this, ring]() { StartRinging(ring); });
     }
 }
 
-void AlarmManager::StartRinging(const RingInfo& info, int attempt) {
+void AlarmManager::StartRinging(const RingInfo& info) {
     current_ring_ = info;
-    ring_attempt_ = attempt;
     if (!ringing_) {
         ringing_ = true;
         if (on_ring_start_) {
@@ -459,7 +428,7 @@ void AlarmManager::RingTick() {
         return;
     }
     if (ring_elapsed_ms_ >= kRingSeconds * 1000) {
-        Application::GetInstance().Schedule([this]() { OnRingTimeout(); });
+        Application::GetInstance().Schedule([this]() { StopRinging(0); });
         return;
     }
     const int elapsed = ring_elapsed_ms_;
@@ -480,12 +449,9 @@ void AlarmManager::RingTick() {
             case kDeviceStateConnecting:
                 if (idle_seen_while_ringing_) {
                     // The device was idle and ringing, then someone said the wake word
-                    // (or pressed talk): that means "I'm awake", so stop the alarm.
-                    RingInfo info = current_ring_;
+                    // (or pressed talk): that means "I'm awake", so stop the alarm and
+                    // let the conversation go on.
                     StopRinging(0);
-                    if (on_ring_answered_) {
-                        on_ring_answered_(info);
-                    }
                 } else if (app.GetDeviceState() != kDeviceStateConnecting &&
                            elapsed >= next_toggle_ms_) {
                     // A conversation left over from setting the alarm: end it so the
@@ -499,37 +465,6 @@ void AlarmManager::RingTick() {
                 break;
         }
     });
-}
-
-// Nobody answered: stop, and for an alarm (not a timer) set a 10-minute snooze
-// timer (on screen like any timer) that rings as the alarm again, up to kAlarmRings
-// rings in all.
-void AlarmManager::OnRingTimeout() {
-    if (!ringing_) {
-        return;
-    }
-    const RingInfo info = current_ring_;
-    const int attempt = ring_attempt_;
-    StopRinging(0);
-    if (!info.snooze_ok || attempt >= kAlarmRings) {
-        ESP_LOGI(TAG, "Ring ended without an answer");
-        return;
-    }
-    const int id = AddTimer(kAlarmRetrySeconds, "Snooze");
-    if (id < 0) {
-        return;
-    }
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        retry_timer_id_ = id;
-        retry_info_ = info;
-        retry_attempt_ = attempt + 1;
-    }
-    ESP_LOGI(TAG, "No answer: snooze %d min, then ring %d of %d", kAlarmRetrySeconds / 60,
-             attempt + 1, kAlarmRings);
-    if (on_timer_set_) {
-        on_timer_set_(kAlarmRetrySeconds);  // shows the snooze countdown
-    }
 }
 
 void AlarmManager::StopRinging(int snooze_minutes) {
@@ -547,7 +482,6 @@ void AlarmManager::StopRinging(int snooze_minutes) {
             snooze.id = NextIdLocked();
             snooze.is_timer = true;
             snooze.fire_at = static_cast<int64_t>(now) + snooze_minutes * 60;
-            snooze.created_at = static_cast<int64_t>(now);
             snooze.label = current_ring_.label.empty() ? std::string("Snooze") : current_ring_.label;
             alarms_.push_back(snooze);
             SaveLocked();
@@ -566,7 +500,6 @@ int AlarmManager::AddTimer(int seconds, const std::string& label) {
     Alarm alarm;
     alarm.is_timer = true;
     alarm.fire_at = static_cast<int64_t>(now) + seconds;
-    alarm.created_at = static_cast<int64_t>(now);
     alarm.label = label;
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -618,25 +551,4 @@ bool AlarmManager::ExtendTimer(int id, int seconds) {
     SaveLocked();
     ESP_LOGI(TAG, "Timer %d extended by %d s", target->id, seconds);
     return true;
-}
-
-int AlarmManager::TimerRemaining(int id) {
-    time_t now = time(nullptr);
-    std::lock_guard<std::mutex> lock(mutex_);
-    for (const auto& alarm : alarms_) {
-        if (alarm.is_timer && alarm.id == id) {
-            return static_cast<int>(std::max<int64_t>(0, alarm.fire_at - static_cast<int64_t>(now)));
-        }
-    }
-    return -1;
-}
-
-bool AlarmManager::CancelPendingRing() {
-    int id = 0;
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        id = retry_timer_id_;
-        retry_timer_id_ = 0;
-    }
-    return id != 0 && CancelTimer(id);
 }

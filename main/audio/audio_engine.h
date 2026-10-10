@@ -39,9 +39,6 @@ public:
     // Wake word detection threshold (0.4 - 0.9999, lower is more sensitive); a value
     // <= 0 restores the model default. Engines without support ignore it.
     virtual void SetWakeWordThreshold(float threshold) { (void)threshold; }
-    // Lets the board switch acoustic echo cancellation off while nothing plays, to
-    // save CPU (default: allowed, i.e. the engine's own rules apply).
-    virtual void SetAecAllowed(bool allowed) { (void)allowed; }
 };
 
 #endif

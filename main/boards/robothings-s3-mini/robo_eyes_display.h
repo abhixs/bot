@@ -82,18 +82,10 @@ public:
 
     // Everything the user says (speech-to-text), for local voice shortcuts.
     void OnUserSpeech(std::function<void(const std::string&)> cb) { on_user_speech_ = std::move(cb); }
-    // Every sentence the assistant starts to speak (not shown: no text on screen).
-    void OnAssistantSentence(std::function<void(const std::string&)> cb) {
-        on_assistant_sentence_ = std::move(cb);
-    }
 
     // Seconds left on the running timer, or -1 (the countdown replaces the eyes
     // while the device is idle).
     void SetCountdownProvider(std::function<int()> provider) { countdown_ = std::move(provider); }
-    // True while the countdown shown is paused (its colon blinks).
-    void SetCountdownPausedProvider(std::function<bool()> provider) {
-        countdown_paused_ = std::move(provider);
-    }
     // Returns true if the clock should use 24-hour format.
     void SetClockFormatProvider(std::function<bool()> provider) { use_24h_ = std::move(provider); }
     // Stopwatch: elapsed seconds (-1 = off) and whether it is running.
@@ -155,8 +147,6 @@ private:
     void ShowScreen(DisplayScreen screen);
 
     std::function<void(const std::string&)> on_user_speech_;
-    std::function<void(const std::string&)> on_assistant_sentence_;
     std::function<int()> countdown_;
-    std::function<bool()> countdown_paused_;
     std::function<bool()> use_24h_;
 };

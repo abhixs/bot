@@ -13,11 +13,16 @@ with a new board `robothings-s3-mini`.
 - **Voice alarms and timers** (device-side MCP tools `self.alarm.*`):
   set once / daily / weekdays / weekends / chosen days, list, cancel, snooze, optional
   lamp-on with the alarm. Saved in flash, ring without internet. Stop it by saying the
-  wake word ("Alexa") or pressing any button; each ring lasts 20 s.
+  wake word ("Alexa") or pressing any button; it auto-stops after 60 s.
 - **Lamp relay** voice control (GPIO 12), as before.
 - **Music from your own library**: run `tools/music-server/robothings_music_server.py`
   on a PC with your songs, then say "Alexa, Tum Hi Ho chalao". Saying "Alexa" pauses,
   the song resumes after the chat. Tools `self.music.*`.
+- **Free online music (Jamendo)**: legal music by independent artists in every genre,
+  streamed and decoded (MP3) on the device, no PC needed. Say "Alexa, lofi music chalao"
+  or "Alexa, play some relaxing piano". Jamendo has no Bollywood songs; those come from
+  your own library. Needs a free Jamendo client ID as the `JAMENDO_CLIENT_ID` repository
+  secret (see below).
 - **India time (IST)** by default: the clock is synced from internet time (SNTP) and
   kept at UTC+05:30. Another zone can be set by voice (tool `self.clock.set_timezone`).
 
@@ -46,14 +51,8 @@ Commands are recognised from their key words, so natural variations work.
   light mode pe kardo" invert the panel; "dark mode", "turn off light mode", "screen
   dark karo" return to the default dark screen.
 - **"Time format 12 hours / 24 hours pe kar do"**: switches the clock format (saved).
-- **"Rone wala chehra dikhao", "Excited ho ke dikhao", "Gussa dikhao"...**: shows that
-  expression (crying, excited, angry, in love, ...) with its own 4.5-second cute sound
-  (happy, excited, sad, crying, angry, surprised, shocked, sleeping, in love, wink,
-  blush, confused, thinking, annoyed, tease, curious, sweet), then standby.
-- **"Sorry, I did not understand" replies** are cut after their first words and
-  replaced by a short "hm?" chirp; listening goes on, so just say it again.
-- **"Alexa" always gives the wake sound** and listens: from standby, while the
-  assistant speaks (the reply stops at once) and while it is already listening.
+- **"Roo ke dikhao", "Gussa dikhao", "Dil wali aankhein dikhao"...**: shows that
+  expression (crying, angry, in love, ...) for a few seconds.
 - **Timers, Pomodoro and stopwatch are handled on the device** (no waiting for the AI):
   - "Set a timer for 10 minutes", "10 minute ka timer lagao": starts at once.
   - "Extend 10 minutes", "10 minute aur": more time (after a ring: a new timer of that
@@ -61,29 +60,15 @@ Commands are recognised from their key words, so natural variations work.
   - "Stop" / "alarm band karo": stops the ringing alarm (also right after "Alexa"
     silenced it).
   - **Pomodoro**: "set Pomodoro timer" starts 25 min focus -> 5 min break -> 25 min
-    focus ... Each period starts the next one by itself (the alarm only announces it).
-    "Extend 10 minutes" adds time to the current period (focus or break). "Pause the
-    Pomodoro" / "resume (continue) the Pomodoro" keep the period and its remaining
-    time (the colon blinks while paused). "Stop Pomodoro" ends the session. The
-    countdown is the screen while it runs (switch away with "show time" / "show face",
-    back with "show timer"). The session survives a restart.
+    focus ... When a focus ends: "extend 10 minutes" (focus extension) or "stop" / no
+    answer (the break starts). When a break ends the next focus starts by itself.
+    "Stop Pomodoro" ends the session. The countdown is the screen while it runs
+    (switch away with "show time" / "show face", back with "show timer"). The session
+    survives a restart.
   - **Stopwatch** (counts up, MM:SS): "start stopwatch" (or "start the timer"),
     "pause stopwatch", "resume stopwatch", "stop / end stopwatch" (or "stop the
     timer"), "show stopwatch". The colon blinks while it is paused.
-- **Alarms / timers**: each ring lasts 20 seconds. Only for an alarm or timer set an
-  hour or more ahead (and repeating alarms): when nobody answers, a 10-minute snooze
-  starts (its countdown shows on the screen) and then it rings again, three rings in
-  all (the alarm and two snoozes). "Alexa, stop" during a snooze cancels it. Shorter
-  ones just stop after their 20 seconds. Normal timers never start a Pomodoro break. Saying "Alexa" over the ring stops it and the device
-  goes back to standby (timers keep listening, e.g. for "extend 10 minutes").
-- **Command mode vs conversation**: after a device action through the AI (alarm,
-  timer, lamp, screen...) the device goes back to standby once the reply is spoken;
-  questions keep the conversation open for a follow-up.
-- **Listening timeout**: when nobody speaks, the server's spoken goodbye is cut off
-  and the device plays a short falling "done" beep (the wake sound in reverse) instead.
-- **Interrupting**: "Alexa" while the assistant speaks stops the reply at once, plays
-  the wake sound and listens. Wake word thresholds (wn9_alexa default 0.64): 0.45 while
-  the device speaks or an alarm rings, 0.58 in standby.
+- **Alarms stop by themselves after 20 seconds.**
 - **Wake sound at once**: the popup plays the moment "Alexa" is detected, before the
   server connection opens.
 - **"Show timer" / "show countdown" / "timer dikhao"**: shows the countdown of the
@@ -110,12 +95,20 @@ Commands are recognised from their key words, so natural variations work.
   keeps a copy of what it plays (software playback reference) and the ESP-SR AFE
   removes the device's own sound from the microphone while it listens for the wake
   word. "Alexa" can then be heard over the alarm beep, music or the assistant's voice.
-  It runs only while the device plays something (reply, alarm, music): it is the
-  heaviest part of the audio front end and is not needed otherwise.
 - **Alarms / timers**: the beep (about 1 s) repeats every 3 s and the wake word is more
   sensitive while it rings. Say "Alexa" (or press any button) to stop it.
 - A clipping microphone (too loud / too close) is reported in the serial log.
 - Speech-to-text itself runs on the server.
+
+## Change the wake word by voice
+
+Say "Alexa, change your wake word to Jarvis". Available names: Alexa, Hi ESP, Jarvis,
+Computer, Sophia, Mycroft, Hi Joy, Hi Jason, Hi Andy, Hey Willow, Hey Wanda, Hey Ivy,
+Hey Kira, Hi Lily, Hi Telly, Hi Wall E, Nihao Xiaozhi. The device restarts, downloads
+the new voice model from the repository's `gh-pages` branch (`wakewords/`, about
+0.55 MB, via raw.githubusercontent.com so GitHub Pages does not need to be on), restarts
+once more and then answers to the new name. Any other name is not possible: each
+wake word is a trained model and only one fits in the 4 MB flash at a time.
 
 ## Time
 
@@ -166,3 +159,14 @@ GitHub Pages flasher works by replacing the five `.bin` files.
 3. The OLED status line shows an activation code. Add the device on
    https://xiaozhi.me with that code. Set language, voice and personality there.
 
+## Online music setup (Jamendo, one time)
+
+1. Create a free account at https://devportal.jamendo.com and add an application
+   (non-commercial use). Copy its **Client ID**.
+2. In GitHub: repository **Settings -> Secrets and variables -> Actions -> New repository
+   secret**. Name `JAMENDO_CLIENT_ID`, value = the Client ID. (Optional: the firmware
+   has a default client ID in `music_player.cc`; the secret overrides it.)
+3. **Actions -> Build RoboThings firmware -> Run workflow**, then flash the new firmware.
+
+Jamendo's API is free for non-commercial use; selling devices with it needs a
+commercial licence from Jamendo.
