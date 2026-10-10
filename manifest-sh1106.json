@@ -1,0 +1,32 @@
+{
+  "name": "RoboThings S3 Mini - 1.3\" SH1106 OLED",
+  "version": "2.5.1-robothings",
+  "new_install_prompt_erase": true,
+  "builds": [
+    {
+      "chipFamily": "ESP32-S3",
+      "parts": [
+        {
+          "path": "firmware-sh1106/bootloader.bin",
+          "offset": "0x0"
+        },
+        {
+          "path": "firmware-sh1106/partition-table.bin",
+          "offset": "0x8000"
+        },
+        {
+          "path": "firmware-sh1106/ota_data_initial.bin",
+          "offset": "0xd000"
+        },
+        {
+          "path": "firmware-sh1106/xiaozhi.bin",
+          "offset": "0x10000"
+        },
+        {
+          "path": "firmware-sh1106/generated_assets.bin",
+          "offset": "0x300000"
+        }
+      ]
+    }
+  ]
+}
