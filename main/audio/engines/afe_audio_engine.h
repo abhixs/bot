@@ -46,6 +46,7 @@ public:
     bool GetWakeWordOpus(std::vector<uint8_t>& opus) override;
     const std::string& GetLastDetectedWakeWord() const override { return last_detected_wake_word_; }
     void SetWakeWordThreshold(float threshold) override;
+    void SetAecAllowed(bool allowed) override;
 
 private:
     enum class WakeDetector {
@@ -85,6 +86,7 @@ private:
     // Requested WakeNet threshold (<= 0: model default), applied by ProcessingTask.
     std::atomic<float> wakenet_threshold_{0.0f};
     std::atomic<bool> wakenet_threshold_dirty_{false};
+    std::atomic<bool> aec_allowed_{true};
 
     std::unique_ptr<CustomWakeWord> custom_wake_word_;
     std::vector<std::string> wake_words_;

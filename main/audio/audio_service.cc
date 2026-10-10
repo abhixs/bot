@@ -948,6 +948,20 @@ bool AudioService::InitializeAudioEngine() {
     return true;
 }
 
+bool AudioService::SetCodecTaskPriority(UBaseType_t priority) {
+    if (opus_codec_task_handle_ == nullptr) {
+        return false;
+    }
+    vTaskPrioritySet(opus_codec_task_handle_, priority);
+    return true;
+}
+
+void AudioService::AllowEchoCancellation(bool allowed) {
+    if (audio_engine_ != nullptr) {
+        audio_engine_->SetAecAllowed(allowed);
+    }
+}
+
 void AudioService::SetWakeWordThreshold(float threshold) {
     if (audio_engine_ != nullptr) {
         audio_engine_->SetWakeWordThreshold(threshold);

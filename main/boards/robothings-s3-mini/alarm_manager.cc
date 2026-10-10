@@ -375,22 +375,10 @@ void AlarmManager::CheckAlarms() {
         return;
     }
 
-    {
-        // Re-ring of an alarm nobody answered.
-        std::lock_guard<std::mutex> lock(mutex_);
-        if (retry_pending_ && static_cast<int64_t>(now) >= retry_at_) {
-            retry_pending_ = false;
-            RingInfo info = retry_info_;
-            const int attempt = retry_attempt_;
-            ESP_LOGI(TAG, "Alarm ring %d of %d", attempt, kAlarmRings);
-            Application::GetInstance().Schedule(
-                [this, info, attempt]() { StartRinging(info, attempt); });
-        }
-    }
-
     bool changed = false;
     bool have_ring = false;
     RingInfo ring;
+    int attempt = 1;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         for (auto it = alarms_.begin(); it != alarms_.end();) {
@@ -407,6 +395,13 @@ void AlarmManager::CheckAlarms() {
                 ring.lamp = it->lamp;
                 ring.id = it->id;
                 ring.is_timer = it->is_timer;
+                if (it->id == retry_timer_id_ && retry_timer_id_ != 0) {
+                    // The snooze of an unanswered alarm: ring as that alarm again.
+                    ring = retry_info_;
+                    ring.id = it->id;
+                    attempt = retry_attempt_;
+                    retry_timer_id_ = 0;
+                }
             } else if (!on_time) {
                 ESP_LOGW(TAG, "Alarm %d missed (device was off or clock jumped)", it->id);
             }
@@ -424,18 +419,15 @@ void AlarmManager::CheckAlarms() {
     }
 
     if (have_ring) {
-        ESP_LOGI(TAG, "Ringing: %s %s", ring.title.c_str(), ring.label.c_str());
-        Application::GetInstance().Schedule([this, ring]() { StartRinging(ring); });
+        ESP_LOGI(TAG, "Ringing: %s %s (ring %d)", ring.title.c_str(), ring.label.c_str(), attempt);
+        Application::GetInstance().Schedule(
+            [this, ring, attempt]() { StartRinging(ring, attempt); });
     }
 }
 
 void AlarmManager::StartRinging(const RingInfo& info, int attempt) {
     current_ring_ = info;
     ring_attempt_ = attempt;
-    if (attempt == 1) {
-        std::lock_guard<std::mutex> lock(mutex_);
-        retry_pending_ = false;  // a new alarm replaces an older pending re-ring
-    }
     if (!ringing_) {
         ringing_ = true;
         if (on_ring_start_) {
@@ -498,35 +490,40 @@ void AlarmManager::RingTick() {
     });
 }
 
-// Nobody answered: stop, and for an alarm (not a timer) ring again in 10 minutes,
-// up to kAlarmRings rings in all.
+// Nobody answered: stop, and for an alarm (not a timer) set a 10-minute snooze
+// timer (on screen like any timer) that rings as the alarm again, up to kAlarmRings
+// rings in all.
 void AlarmManager::OnRingTimeout() {
     if (!ringing_) {
         return;
     }
     const RingInfo info = current_ring_;
     const int attempt = ring_attempt_;
-    StopRinging(0);  // (clears any pending re-ring)
+    StopRinging(0);
     if (info.is_timer || attempt >= kAlarmRings) {
         ESP_LOGI(TAG, "Ring ended without an answer");
         return;
     }
-    std::lock_guard<std::mutex> lock(mutex_);
-    retry_info_ = info;
-    retry_attempt_ = attempt + 1;
-    retry_at_ = static_cast<int64_t>(time(nullptr)) + kAlarmRetrySeconds;
-    retry_pending_ = true;
-    ESP_LOGI(TAG, "No answer: ringing again in %d min (%d of %d)", kAlarmRetrySeconds / 60,
-             retry_attempt_, kAlarmRings);
+    const int id = AddTimer(kAlarmRetrySeconds, "Snooze");
+    if (id < 0) {
+        return;
+    }
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        retry_timer_id_ = id;
+        retry_info_ = info;
+        retry_attempt_ = attempt + 1;
+    }
+    ESP_LOGI(TAG, "No answer: snooze %d min, then ring %d of %d", kAlarmRetrySeconds / 60,
+             attempt + 1, kAlarmRings);
+    if (on_timer_set_) {
+        on_timer_set_(kAlarmRetrySeconds);  // shows the snooze countdown
+    }
 }
 
 void AlarmManager::StopRinging(int snooze_minutes) {
     if (!ringing_) {
         return;
-    }
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        retry_pending_ = false;  // answered (or replaced): no more re-rings
     }
     ringing_ = false;
     last_ring_stop_us_ = esp_timer_get_time();
@@ -622,8 +619,11 @@ int AlarmManager::TimerRemaining(int id) {
 }
 
 bool AlarmManager::CancelPendingRing() {
-    std::lock_guard<std::mutex> lock(mutex_);
-    const bool pending = retry_pending_;
-    retry_pending_ = false;
-    return pending;
+    int id = 0;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        id = retry_timer_id_;
+        retry_timer_id_ = 0;
+    }
+    return id != 0 && CancelTimer(id);
 }
