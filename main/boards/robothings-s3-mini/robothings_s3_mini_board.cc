@@ -12,6 +12,7 @@
 #include "mcp_server.h"
 #include "music_player.h"
 #include "pomodoro.h"
+#include "news_feed.h"
 #include "popdown_sound.h"
 #include "reminder_manager.h"
 #include "robo_sounds.h"
@@ -945,6 +946,7 @@ private:
         });
         alarms.Initialize();
         ReminderManager::GetInstance().Initialize();
+        RegisterNewsTools();
 
         auto& pomodoro = Pomodoro::GetInstance();
         pomodoro.OnPhaseStart([this](Pomodoro::Phase) {

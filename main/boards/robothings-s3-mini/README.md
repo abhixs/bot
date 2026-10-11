@@ -74,6 +74,10 @@ Commands are recognised from their key words, so natural variations work.
     standby), a soft "tick ... tock" plays once per second. On by default; "turn off
     the ticking sound" / "ticking sound off karo" and "ticking sound on karo" switch it
     (saved).
+- **Latest news from the web**: "latest news batao", "aaj ki taaza khabar", "cricket
+  ki latest news", "Gurugram news": the device fetches the current headlines live from
+  Google News (RSS, India edition, English or Hindi, no key needed) through the
+  `self.news.latest` tool and the assistant reads out a short summary.
 - **Reminders** ("remind me to drink water after 30 minutes", "kal subah 8 baje dawai
   lene ka yaad dilana", "remind me to call Rahul at 6 PM", daily / weekly ones): the
   AI sets them with the `self.reminder.*` tools and asks when the message or time is
