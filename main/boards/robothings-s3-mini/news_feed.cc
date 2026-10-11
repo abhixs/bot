@@ -22,7 +22,7 @@ constexpr size_t kChunk = 2048;
 constexpr size_t kMaxFeedBytes = 160 * 1024;  // stop reading after this much
 
 // Downloads the feed (following up to 2 redirects) and keeps the first headlines.
-bool FetchHeadlines(const std::string& first_url, size_t max_items,
+bool FetchFeed(const std::string& first_url, size_t max_items,
                     std::vector<news_rss::Headline>& out, std::string& error) {
     auto network = Board::GetInstance().GetNetwork();
     if (network == nullptr) {
@@ -81,6 +81,15 @@ bool FetchHeadlines(const std::string& first_url, size_t max_items,
     return false;
 }
 
+}  // namespace
+
+bool FetchHeadlines(const std::string& query, const std::string& language, size_t max_items,
+                    std::vector<news_rss::Headline>& out, std::string& error) {
+    return FetchFeed(news_rss::FeedUrl(query, language), max_items, out, error);
+}
+
+namespace {
+
 std::string Lower(std::string text) {
     for (auto& c : text) c = static_cast<char>(tolower(static_cast<unsigned char>(c)));
     return text;
@@ -110,7 +119,7 @@ void RegisterNewsTools() {
             const int count = properties["count"].value<int>();
             std::vector<news_rss::Headline> headlines;
             std::string error;
-            if (!FetchHeadlines(news_rss::FeedUrl(query, language), count, headlines, error)) {
+            if (!FetchHeadlines(query, language, count, headlines, error)) {
                 return std::unexpected(error);
             }
             cJSON* result = cJSON_CreateObject();

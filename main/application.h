@@ -110,10 +110,10 @@ public:
 
     void Reboot();
     void WakeWordInvoke(const std::string& wake_word);
-    // Opens a conversation from standby as if the user had said `text` (sent to the
-    // server as the detected wake phrase, like CONFIG_SEND_WAKE_WORD_DATA does), so
-    // the assistant answers it and listening follows, without a wake word. For
-    // device-triggered announcements (e.g. a reminder). Ignored unless idle.
+    // Opens a conversation from standby without a wake word (listening starts), e.g.
+    // after a device-triggered announcement. A non-empty `text` is also sent to the
+    // server as the detected wake phrase (what CONFIG_SEND_WAKE_WORD_DATA sends);
+    // whether the server answers it depends on the server. Ignored unless idle.
     void InvokeWithText(const std::string& text);
     // Play the wake sound (popup) the moment the wake word is detected, before the
     // audio channel is opened, instead of when listening starts. Off by default.

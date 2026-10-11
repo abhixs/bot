@@ -15,6 +15,7 @@
 #include "news_feed.h"
 #include "popdown_sound.h"
 #include "reminder_manager.h"
+#include "device_tts.h"
 #include "robo_sounds.h"
 #include "robo_audio_codec.h"
 #include "robo_eyes_display.h"
@@ -98,6 +99,7 @@ private:
         Quiet,      // just close it (nothing to silence; lets the wake sound finish)
         EndBeep,    // Silent (inactivity: the server's goodbye is not heard)
         Sound,      // Silent, then also play standby_sound_ (e.g. an expression's sound)
+        SilentNoBeep,  // Silent without the beep (device speech follows, then the beep)
     };
 
     i2c_master_bus_handle_t display_i2c_bus_ = nullptr;
@@ -178,36 +180,90 @@ private:
         tick_waiting_ = false;
     }
 
-    // Reminders (see reminder_manager.h), announced one at a time from standby:
+    // Device speech (device_tts.h) for what the cloud assistant cannot be asked to
+    // say: reminders and the news.
+    //
+    // Reminders (reminder_manager.h), one at a time from a settled standby:
     //   Chime  - the notification sound, 5 x ~0.8 s (about 4 s)
-    //   Speak  - a conversation opened with a prompt: the assistant says
-    //            "Reminder, <message>" and listening follows (no wake word)
-    //   Await  - the user's answer: okay / stop -> standby; "remind me after N
-    //            minutes" -> snoozed, the AI confirms, standby; anything else -> the
-    //            AI (asks to repeat). Over once the device is back in standby.
-    enum class ReminderPhase { Idle, Chime, Speak, Await };
+    //   Say    - "Reminder, <message>." spoken by the device
+    //   Listen - a conversation opened without a wake word (listening)
+    //   Await  - the answer: okay / stop -> standby beep; "remind me after N minutes"
+    //            -> snoozed, "Theek hai, N minute baad yaad dila dungi", standby beep;
+    //            anything else -> "Sorry, phir se boliye?" and listen again (twice at
+    //            most); silence -> the usual listening timeout and beep.
+    //   Reply  - device speech once standby is reached, then the beep or Listen.
+    // News ("latest news batao"): the assistant's own answer is cut, the device
+    // reads out the top headlines (Reply), then the standby beep.
+    enum class ReminderPhase { Idle, Chime, Say, Listen, Await, Reply };
+    enum class AfterReply { Beep, Listen };
     static constexpr int kReminderChimes = 5;
-    static constexpr const char* kReminderMarker = "(Device reminder";
+    static constexpr int kMaxReasks = 2;
     ReminderPhase reminder_phase_ = ReminderPhase::Idle;
     ReminderManager::Due reminder_;
+    bool reminder_active_ = false;    // the phases belong to a reminder (not the news)
     int64_t reminder_since_us_ = 0;
     int64_t reminder_next_try_us_ = 0;
-    int64_t standby_since_us_ = 0;  // when the device last became idle (0 = not idle)
-    bool reminder_channel_opened_ = false;
+    int64_t standby_since_us_ = 0;    // when the device last became idle (0 = not idle)
+    int reasks_ = 0;
+    bool tts_running_ = false;
+    DeviceTts::Result tts_result_ = DeviceTts::Result::kOk;
+    std::vector<DeviceTts::Line> reply_lines_;
+    bool reply_news_ = false;
+    std::string news_query_;
+    bool news_hindi_ = false;
+    AfterReply reply_after_ = AfterReply::Beep;
 
-    std::string ReminderPrompt(const ReminderManager::Due& due) const {
-        std::string line = "Reminder, " + due.message + ".";
-        if (due.missed) {
-            line = "Missed reminder from " +
-                   alarm_schedule::FormatClock(static_cast<time_t>(due.due_at)).substr(4) + ": " +
-                   due.message + ".";
+    bool StartTts(std::vector<DeviceTts::Line> lines, bool hold = false) {
+        tts_result_ = DeviceTts::Result::kOk;
+        tts_running_ = DeviceTts::GetInstance().Speak(
+            std::move(lines),
+            [this](DeviceTts::Result r) {
+                tts_running_ = false;
+                tts_result_ = r;
+            },
+            hold);
+        if (!tts_running_) tts_result_ = DeviceTts::Result::kFailed;
+        return tts_running_;
+    }
+
+    bool StartNewsTts() {
+        tts_result_ = DeviceTts::Result::kOk;
+        tts_running_ = DeviceTts::GetInstance().SpeakNews(news_query_, news_hindi_,
+                                                          [this](DeviceTts::Result r) {
+                                                              tts_running_ = false;
+                                                              tts_result_ = r;
+                                                          });
+        return tts_running_;
+    }
+
+    void CancelDeviceSpeech() {
+        if (tts_running_) DeviceTts::GetInstance().Cancel();
+    }
+
+    // Ends the conversation (no beep yet) and speaks `lines` once in standby.
+    void ReplyInStandby(std::vector<DeviceTts::Line> lines, AfterReply after) {
+        reply_lines_ = std::move(lines);
+        reply_news_ = false;
+        reply_after_ = after;
+        reminder_phase_ = ReminderPhase::Reply;
+        reminder_since_us_ = esp_timer_get_time();
+        GoStandby(StandbyStyle::SilentNoBeep);
+    }
+
+    void OpenListening() {
+        reminder_phase_ = ReminderPhase::Listen;
+        reminder_since_us_ = esp_timer_get_time();
+        Application::GetInstance().InvokeWithText("");
+    }
+
+    static std::string SnoozeConfirmation(int seconds) {
+        if (seconds % 3600 == 0) {
+            const int hours = seconds / 3600;
+            return "ठीक है, " + std::to_string(hours) + (hours == 1 ? " घंटे" : " घंटे") +
+                   " बाद याद दिला दूँगी।";
         }
-        return std::string(kReminderMarker) +
-               ", not the user speaking.) Say exactly this and nothing more: \"" + line +
-               "\" Then listen to my answer. If I ask to be reminded again after some time, "
-               "the device has already rescheduled it: confirm in one short sentence (e.g. "
-               "'Okay, 10 minute baad yaad dilaungi.') and do not call any tool. If my answer is "
-               "unclear, ask me in a few words to repeat it.";
+        return "ठीक है, " + std::to_string(std::max(1, seconds / 60)) +
+               " मिनट बाद याद दिला दूँगी।";
     }
 
     // Main task, from the conversation watcher (every 50 ms).
@@ -220,12 +276,14 @@ private:
         } else {
             standby_since_us_ = 0;
         }
+        // A settled standby: no conversation, alarm, standby beep or muted speaker.
+        const bool settled = state == kDeviceStateIdle && now - standby_since_us_ > 800 * 1000 &&
+                             !AlarmManager::GetInstance().IsRinging() &&
+                             (standby_timer_ == nullptr || !esp_timer_is_active(standby_timer_));
         switch (reminder_phase_) {
             case ReminderPhase::Idle: {
-                // Only from a settled standby: no conversation, alarm or standby beep.
-                if (now < reminder_next_try_us_ || state != kDeviceStateIdle ||
+                if (now < reminder_next_try_us_ || !settled ||
                     now - standby_since_us_ < 1500 * 1000 ||
-                    AlarmManager::GetInstance().IsRinging() ||
                     !app.GetAudioService().IsPlaybackIdle()) {
                     return;
                 }
@@ -237,56 +295,110 @@ private:
                 for (int i = 0; i < kReminderChimes; i++) {
                     app.PlaySound(Lang::Sounds::OGG_VIBRATION);
                 }
+                reminder_active_ = true;
+                reasks_ = 0;
                 reminder_phase_ = ReminderPhase::Chime;
                 reminder_since_us_ = now;
+                // Fetch the speech while the sound plays; it is let out after it.
+                std::string line = "Reminder, " + reminder_.message + ".";
+                if (reminder_.missed) {
+                    line = "Missed reminder, " +
+                           alarm_schedule::FormatClock(static_cast<time_t>(reminder_.due_at))
+                               .substr(4) +
+                           ": " + reminder_.message + ".";
+                }
+                StartTts({{line, "hi"}}, true);
                 return;
             }
             case ReminderPhase::Chime:
+            case ReminderPhase::Say:
+                if (reminder_phase_ == ReminderPhase::Chime && state == kDeviceStateIdle &&
+                    now - reminder_since_us_ > 3500 * 1000 &&
+                    app.GetAudioService().IsPlaybackIdle()) {
+                    reminder_phase_ = ReminderPhase::Say;  // the sound is over: speak
+                    DeviceTts::GetInstance().Release();
+                    return;
+                }
                 if (state != kDeviceStateIdle) {
-                    // The user started talking: announce it once they are done.
+                    // The user started talking: stop, and announce it again afterwards.
+                    CancelDeviceSpeech();
                     reminder_phase_ = ReminderPhase::Idle;
+                    reminder_active_ = false;
                     reminder_next_try_us_ = now + 3 * 1000000LL;
                     return;
                 }
-                if (now - reminder_since_us_ < 3500 * 1000 ||
-                    !app.GetAudioService().IsPlaybackIdle()) {
-                    return;
+                if (reminder_phase_ == ReminderPhase::Chime) {
+                    // Speech could not be fetched: no need to wait for the release.
+                    if (tts_running_ || tts_result_ == DeviceTts::Result::kOk) return;
                 }
-                reminder_phase_ = ReminderPhase::Speak;
-                reminder_since_us_ = now;
-                reminder_channel_opened_ = false;
-                app.InvokeWithText(ReminderPrompt(reminder_));
-                return;
-            case ReminderPhase::Speak:
-                if (state == kDeviceStateListening) reminder_channel_opened_ = true;
-                if (state == kDeviceStateSpeaking) {
-                    // It is being said: done for good (never announced twice).
-                    reminders.MarkAnnounced(reminder_.id, reminder_.due_at);
-                    reminder_phase_ = ReminderPhase::Await;
-                    user_turn_seen_ = true;  // not the server's inactivity goodbye
-                    return;
-                }
-                if ((state == kDeviceStateIdle && now - reminder_since_us_ > 3 * 1000000LL) ||
-                    now - reminder_since_us_ > 25 * 1000000LL) {
-                    if (reminder_channel_opened_) {
-                        // The assistant got it but did not speak: do not loop on it.
-                        ESP_LOGW(TAG, "Reminder %d: no spoken answer", reminder_.id);
-                        reminders.MarkAnnounced(reminder_.id, reminder_.due_at);
-                        reminder_phase_ = state == kDeviceStateIdle ? ReminderPhase::Idle
-                                                                   : ReminderPhase::Await;
-                    } else {
-                        ESP_LOGW(TAG, "Reminder %d: assistant not reachable", reminder_.id);
-                        reminders.MarkFailed(reminder_.id, reminder_.due_at);
-                        reminder_phase_ = ReminderPhase::Idle;
-                    }
+                if (tts_running_ || !app.GetAudioService().IsPlaybackIdle()) return;
+                if (tts_result_ != DeviceTts::Result::kOk) {
+                    ESP_LOGW(TAG, "Reminder %d could not be spoken (no internet?)", reminder_.id);
+                    reminders.MarkFailed(reminder_.id, reminder_.due_at);
+                    reminder_phase_ = ReminderPhase::Idle;
+                    reminder_active_ = false;
                     reminder_next_try_us_ = now + 60 * 1000000LL;
+                    app.PlaySound(PopDownOgg());
+                    return;
+                }
+                // Said: done for good (never announced twice), then listen.
+                reminders.MarkAnnounced(reminder_.id, reminder_.due_at);
+                OpenListening();
+                return;
+            case ReminderPhase::Listen:
+                if (state == kDeviceStateListening) {
+                    reminder_phase_ = ReminderPhase::Await;
+                } else if (now - reminder_since_us_ > 15 * 1000000LL ||
+                           (state == kDeviceStateIdle && now - reminder_since_us_ > 3 * 1000000LL)) {
+                    reminder_phase_ = ReminderPhase::Idle;  // could not open: give up quietly
+                    reminder_active_ = false;
+                    reminder_next_try_us_ = now + 2 * 1000000LL;
                 }
                 return;
             case ReminderPhase::Await:
                 if (state == kDeviceStateIdle) {
                     reminder_phase_ = ReminderPhase::Idle;
+                    reminder_active_ = false;
                     reminder_next_try_us_ = now + 2 * 1000000LL;  // the next one, if any
                 }
+                return;
+            case ReminderPhase::Reply:
+                if (!tts_running_ && reminder_since_us_ != 0) {
+                    // Not started yet: wait for a settled standby.
+                    if (!settled) {
+                        if (now - reminder_since_us_ > 10 * 1000000LL) {
+                            reminder_phase_ = ReminderPhase::Idle;
+                            reminder_active_ = false;
+                        }
+                        return;
+                    }
+                    reminder_since_us_ = 0;  // started
+                    const bool started = reply_news_ ? StartNewsTts() : StartTts(reply_lines_);
+                    if (!started) {
+                        reminder_phase_ = ReminderPhase::Idle;
+                        reminder_active_ = false;
+                        app.PlaySound(PopDownOgg());
+                    }
+                    return;
+                }
+                if (state != kDeviceStateIdle) {
+                    CancelDeviceSpeech();  // "Alexa" over it: the conversation wins
+                    reminder_phase_ = ReminderPhase::Idle;
+                    reminder_active_ = false;
+                    return;
+                }
+                if (tts_running_ || !app.GetAudioService().IsPlaybackIdle()) return;
+                if (tts_result_ == DeviceTts::Result::kOk && reply_after_ == AfterReply::Listen) {
+                    OpenListening();
+                    return;
+                }
+                if (tts_result_ == DeviceTts::Result::kFailed && reply_news_) {
+                    app.PlaySound(Lang::Sounds::OGG_EXCLAMATION);  // no news (no internet?)
+                }
+                app.PlaySound(PopDownOgg());  // back in standby
+                reminder_phase_ = ReminderPhase::Idle;
+                reminder_active_ = false;
+                reminder_next_try_us_ = now + 2 * 1000000LL;
                 return;
         }
     }
@@ -383,7 +495,8 @@ private:
                 app.GetAudioService().ResetDecoder();
                 if (codec_ != nullptr) codec_->SetMuted(false);
             }
-            if (state == kDeviceStateIdle && !AlarmManager::GetInstance().IsRinging()) {
+            if (state == kDeviceStateIdle && !AlarmManager::GetInstance().IsRinging() &&
+                standby_style_ != StandbyStyle::SilentNoBeep) {
                 app.PlaySound(PopDownOgg());  // every standby ends with the "done" beep
                 if (standby_style_ == StandbyStyle::Sound && !standby_sound_.empty()) {
                     app.PlaySound(standby_sound_);  // then e.g. the expression's sound
@@ -408,31 +521,52 @@ private:
     // speech-to-text result so they act at once and the AI does not answer them.
     void HandleUserSpeech(const std::string& text) {
         user_turn_seen_ = true;
-        if (text.find(kReminderMarker) != std::string::npos) {
-            return;  // our own reminder prompt, echoed back by the server
-        }
         assistant_sentences_ = 0;
         short_sorry_ = false;
-        if (reminder_phase_ == ReminderPhase::Await) {
+        if (reminder_phase_ == ReminderPhase::Await && reminder_active_) {
+            // The answer to a reminder: handled on the device (the assistant does not
+            // know about the reminder), its own reply is cut.
             int seconds = 0;
             switch (ParseReminderReply(text, seconds)) {
                 case ReminderReply::Acknowledge:
                     ESP_LOGI(TAG, "Reminder acknowledged (%s)", text.c_str());
+                    reminder_phase_ = ReminderPhase::Idle;
+                    reminder_active_ = false;
                     GoStandby();  // silent, then the standby beep
                     return;
                 case ReminderReply::Snooze:
                     if (ReminderManager::GetInstance().Snooze(reminder_.message, seconds) > 0) {
                         ESP_LOGI(TAG, "Reminder snoozed for %d s (%s)", seconds, text.c_str());
-                        action_pending_ = true;  // the AI confirms briefly, then standby
+                        ReplyInStandby({{SnoozeConfirmation(seconds), "hi"}}, AfterReply::Beep);
                         return;
                     }
                     break;
                 case ReminderReply::None:
-                    break;  // the AI answers (asks to repeat if unclear)
+                    break;
             }
+            if (reasks_ < kMaxReasks) {
+                reasks_++;
+                ESP_LOGI(TAG, "Reminder answer not understood (%s): asking again", text.c_str());
+                ReplyInStandby({{"Sorry, फिर से बोलिए?", "hi"}}, AfterReply::Listen);
+            } else {
+                reminder_phase_ = ReminderPhase::Idle;
+                reminder_active_ = false;
+                GoStandby();
+            }
+            return;
         }
         const VoiceCommand command = ParseVoiceCommand(text);
         if (command.type == VoiceShortcut::None) return;
+        if (command.type == VoiceShortcut::News) {
+            // Read out by the device (live headlines); the assistant's answer is cut.
+            ESP_LOGI(TAG, "Voice shortcut: news '%s'%s", command.query.c_str(),
+                     command.hindi ? " (Hindi)" : "");
+            news_query_ = command.query;
+            news_hindi_ = command.hindi;
+            ReplyInStandby({}, AfterReply::Beep);
+            reply_news_ = true;
+            return;
+        }
         let_ai_reply_ = false;
         if (!RunShortcut(command)) {
             return;  // does not apply right now (e.g. "stop" with nothing ringing): the AI answers
@@ -556,6 +690,8 @@ private:
             case VoiceShortcut::TickingOff:
                 SetTicking(command.type == VoiceShortcut::TickingOn);
                 return true;
+            case VoiceShortcut::News:
+                return false;  // handled in HandleUserSpeech
             case VoiceShortcut::LightTheme:
             case VoiceShortcut::DarkTheme:
                 if (eyes_display_ == nullptr) return false;
@@ -707,7 +843,9 @@ private:
         // playing it only takes CPU from the wake word and the speech encoder.
         const bool playing = state == kDeviceStateSpeaking || alarms.IsRinging() ||
                              state == kDeviceStateNotifying ||
-                             MusicPlayer::GetInstance().IsPlaying();
+                             MusicPlayer::GetInstance().IsPlaying() || tts_running_ ||
+                             reminder_phase_ == ReminderPhase::Chime ||
+                             reminder_phase_ == ReminderPhase::Say;
         if (static_cast<int>(playing) != aec_allowed_) {
             app.GetAudioService().AllowEchoCancellation(playing);
             aec_allowed_ = playing ? 1 : 0;

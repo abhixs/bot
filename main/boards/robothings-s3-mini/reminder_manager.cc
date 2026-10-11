@@ -324,16 +324,16 @@ void ReminderManager::RegisterTools() {
                 return std::unexpected(
                     std::string("Device clock is not synced yet; try again in a moment."));
             }
-            const std::string message = CleanMessage(properties["message"].value<std::string>());
-            if (message.empty()) {
-                return std::unexpected(std::string(
-                    "No message. Ask the user what the reminder is for, then call again."));
-            }
             if (esp_timer_get_time() - last_snooze_us_ < 30 * 1000000LL) {
                 // The user just asked to be reminded again; the device has done it.
                 return std::string(
                     "{\"success\":true,\"note\":\"Already rescheduled by the device. Just "
                     "confirm in one short sentence.\"}");
+            }
+            const std::string message = CleanMessage(properties["message"].value<std::string>());
+            if (message.empty()) {
+                return std::unexpected(std::string(
+                    "No message. Ask the user what the reminder is for, then call again."));
             }
             reminder_schedule::When when;
             std::string error;

@@ -75,23 +75,28 @@ Commands are recognised from their key words, so natural variations work.
     the ticking sound" / "ticking sound off karo" and "ticking sound on karo" switch it
     (saved).
 - **Latest news from the web**: "latest news batao", "aaj ki taaza khabar", "cricket
-  ki latest news", "Gurugram news": the device fetches the current headlines live from
-  Google News (RSS, India edition, English or Hindi, no key needed) through the
-  `self.news.latest` tool and the assistant reads out a short summary.
+  ki latest news", "Gurugram news", "hindi mein news sunao": the device fetches the
+  current headlines live from Google News (RSS, India edition, no key needed) and reads
+  the top 5 out itself (the assistant's own answer is cut), then the standby beep. The
+  AI can also use the `self.news.latest` tool.
+- **Device speech**: the assistant in the cloud only answers the user, so what the
+  device must say on its own (reminders, news) is spoken with the Google Translate
+  voice (Hindi voice, Indian English for English news), fetched over HTTPS, decoded
+  (MP3) and played on the device. Needs internet.
 - **Reminders** ("remind me to drink water after 30 minutes", "kal subah 8 baje dawai
   lene ka yaad dilana", "remind me to call Rahul at 6 PM", daily / weekly ones): the
   AI sets them with the `self.reminder.*` tools and asks when the message or time is
   missing. They are saved in flash. When one is due (in standby, after any running
-  conversation or alarm) the notification sound plays for about 4 s, the assistant
-  says "Reminder, <message>" and listens without a wake word: "okay", "thik hai",
-  "chup raho", "band karo" end it with the standby beep; "remind me after 10 minutes"
-  / "5 minute baad yaad dilana" sets it again and the assistant confirms; anything
-  unclear is answered by the AI (it asks to repeat); silence ends with the usual
-  listening timeout. Several due together are announced one after another. "What
-  reminders do I have?", "cancel my water reminder", "change my reminder to 9 AM".
-  A reminder cannot ring while the device is off: one missed then is announced once
-  as "Missed reminder from HH:MM" when it is back on. The spoken part needs the
-  server (no internet: the sound plays, the message is tried again up to 3 times).
+  conversation or alarm) the notification sound plays for about 4 s, the device says
+  "Reminder, <message>" and listens without a wake word: "okay", "thik hai", "chup
+  raho", "band karo" end it with the standby beep; "remind me after 10 minutes" / "5
+  minute baad yaad dilana" sets it again ("Theek hai, 5 minute baad yaad dila dungi",
+  then the beep); anything else gets "Sorry, phir se boliye?" (twice at most); silence
+  ends with the usual listening timeout. Several due together are announced one after
+  another. "What reminders do I have?", "cancel my water reminder", "change my
+  reminder to 9 AM". A reminder cannot ring while the device is off: one missed then
+  is announced once as "Missed reminder, HH:MM" when it is back on. Without internet
+  the sound plays and the reminder is tried again (3 times, a minute apart).
 - **Alarms / timers**: each ring lasts 20 seconds. Only for an alarm set an hour or
   more ahead (and repeating alarms): when nobody answers, a 10-minute snooze starts
   (its countdown shows on the screen) and then it rings again, three rings in all (the

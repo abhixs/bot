@@ -1352,7 +1352,9 @@ void Application::ContinueTextInvoke(const std::string& text) {
         return;
     }
     ESP_LOGI(TAG, "Text invoke: %s", text.c_str());
-    protocol_->SendWakeWordDetected(text);
+    if (!text.empty()) {
+        protocol_->SendWakeWordDetected(text);
+    }
     play_popup_on_listening_ = false;
     SetListeningMode(GetDefaultListeningMode());
 }

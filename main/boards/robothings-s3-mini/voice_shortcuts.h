@@ -38,6 +38,7 @@ enum class VoiceShortcut {
     DarkTheme,      // "dark mode", "turn off light mode", "screen dark karo"
     TickingOn,      // "ticking sound on karo", "turn on the ticking"
     TickingOff,     // "turn off the ticking sound", "ticking sound off karo"
+    News,           // "latest news batao", "cricket ki news", "hindi mein khabar sunao"
 };
 
 // Lower-case ASCII, punctuation (also the Devanagari danda) turned into spaces,
@@ -48,6 +49,8 @@ struct VoiceCommand {
     VoiceShortcut type = VoiceShortcut::None;
     int seconds = 0;  // duration for TimerSet / Extend / PomodoroStart (0 = none given)
     const char* expression = nullptr;  // ShowExpression: e.g. "crying"
+    std::string query;                 // News: topic ("" = top stories)
+    bool hindi = false;                // News: Hindi headlines
 };
 
 VoiceCommand ParseVoiceCommand(const std::string& text);

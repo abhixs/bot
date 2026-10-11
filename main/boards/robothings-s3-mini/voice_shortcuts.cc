@@ -421,6 +421,41 @@ constexpr Words kRemindAgainWords = {"remind", "reminder", "yaad", "dilana", "di
                                      "firse", "phirse", "later", "baad", "bad", "after", "aur",
                                      "more", "याद", "बाद", "फिर"};
 
+// News: "latest news batao", "aaj ki khabar", "cricket ki news", "Gurugram news"
+constexpr Words kNewsWords = {"news", "khabar", "khabare", "khabre", "khabrein", "khabren",
+                              "khabaren", "samachar", "headlines", "headline", "न्यूज़",
+                              "न्यूज", "खबर", "खबरें", "ख़बर", "ख़बरें", "समाचार"};
+constexpr Words kNewsFiller = {
+    "latest", "today", "todays", "aaj", "aj", "ki", "ka", "ke", "kya", "hai", "hain", "batao",
+    "bataiye", "bata", "batado", "sunao", "suna", "sunaiye", "sunado", "do", "dijiye", "please",
+    "me", "mujhe", "hume", "humein", "the", "a", "an", "of", "on", "about", "for", "in", "what",
+    "whats", "is", "are", "tell", "give", "read", "top", "taaza", "taza", "tazaa", "abhi",
+    "current", "recent", "new", "any", "koi", "kuch", "sabse", "nayi", "naya", "nai", "mein",
+    "main", "me", "pe", "par", "se", "google", "internet", "web", "search", "karo", "kar", "ho",
+    "raha", "rahi", "rahe", "show", "get", "hindi", "english", "alexa", "aur", "and", "update",
+    "updates", "breaking", "some", "you", "can", "could", "would", "i", "want", "to", "hear",
+    "know", "jaan", "jaana", "chahta", "chahti", "hoon", "hun", "news", "khabar", "khabare",
+    "khabre", "khabrein", "khabren", "khabaren", "samachar", "headlines", "headline", "wali",
+    "wala", "wale", "related", "regarding", "lates", "letest", "aaj", "din", "day", "tak",
+    "आज", "की", "का", "के", "बताओ", "सुनाओ", "न्यूज़", "न्यूज", "खबर", "खबरें", "ख़बर",
+    "ख़बरें", "समाचार", "ताज़ा", "ताजा", "लेटेस्ट", "हिंदी", "में", "क्या", "है"};
+
+VoiceCommand ParseNews(const Sentence& s) {
+    if (!s.Has(kNewsWords)) return {};
+    VoiceCommand command;
+    command.type = VoiceShortcut::News;
+    for (const auto& w : s.words()) {
+        if (w == "hindi" || w == "हिंदी") command.hindi = true;
+        if (static_cast<unsigned char>(w[0]) >= 0xE0) command.hindi = true;  // Devanagari
+        if (In(w, kNewsFiller) || (w.size() == 1 && static_cast<unsigned char>(w[0]) < 0x80)) {
+            continue;  // filler, or e.g. the "s" of "today's"
+        }
+        if (!command.query.empty()) command.query += " ";
+        command.query += w;
+    }
+    return command;
+}
+
 VoiceShortcut ParseTicking(const Sentence& s) {
     if (!s.Has(kTickWords) && !s.HasPhrase(kTickPhrases)) return VoiceShortcut::None;
     if (s.Has(kTickOffWords)) return VoiceShortcut::TickingOff;
@@ -487,6 +522,7 @@ VoiceCommand ParseVoiceCommand(const std::string& raw) {
     if (s.size() == 0 || s.size() > kMaxShortcutWords) return {};
     if (auto r = ParseStandby(s); r != VoiceShortcut::None) return {r};
     if (auto r = ParseTicking(s); r != VoiceShortcut::None) return {r};
+    if (auto r = ParseNews(s); r.type != VoiceShortcut::None) return r;
     if (auto r = ParseTheme(s); r != VoiceShortcut::None) return {r};
     if (auto r = ParseExpression(s); r.type != VoiceShortcut::None) return r;
     if (s.Has(kStopwatchWords)) return ParseStopwatch(s);
@@ -521,6 +557,8 @@ const char* VoiceShortcutName(VoiceShortcut shortcut) {
     switch (shortcut) {
         case VoiceShortcut::Standby:
             return "standby";
+        case VoiceShortcut::News:
+            return "news";
         case VoiceShortcut::TickingOn:
             return "ticking on";
         case VoiceShortcut::TickingOff:
