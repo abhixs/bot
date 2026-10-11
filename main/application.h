@@ -110,6 +110,11 @@ public:
 
     void Reboot();
     void WakeWordInvoke(const std::string& wake_word);
+    // Opens a conversation from standby as if the user had said `text` (sent to the
+    // server as the detected wake phrase, like CONFIG_SEND_WAKE_WORD_DATA does), so
+    // the assistant answers it and listening follows, without a wake word. For
+    // device-triggered announcements (e.g. a reminder). Ignored unless idle.
+    void InvokeWithText(const std::string& text);
     // Play the wake sound (popup) the moment the wake word is detected, before the
     // audio channel is opened, instead of when listening starts. Off by default.
     void SetWakeSoundOnDetect(bool enable) { wake_sound_on_detect_ = enable; }
@@ -172,6 +177,7 @@ private:
     void ContinueOpenAudioChannel(ListeningMode mode);
     void BeginWakeWordInvoke(const std::string& wake_word);
     void ContinueWakeWordInvoke(const std::string& wake_word);
+    void ContinueTextInvoke(const std::string& text);
     void StartListeningAudio();
     void ConfigureWakeWordForListening();
     void StartNotification(std::string audio_url, std::vector<NotifySubtitle> subtitles);

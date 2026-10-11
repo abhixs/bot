@@ -199,9 +199,9 @@ constexpr NumberWord kNumberWords[] = {
     {"nineteen", 19}, {"twenty", 20}, {"thirty", 30}, {"forty", 40}, {"fifty", 50},
     {"sixty", 60}, {"a", 1}, {"an", 1},
     {"ek", 1}, {"do", 2}, {"teen", 3}, {"char", 4}, {"chaar", 4}, {"paanch", 5}, {"panch", 5},
-    {"chhe", 6}, {"saat", 7}, {"aath", 8}, {"nau", 9}, {"das", 10}, {"barah", 12},
+    {"chhe", 6}, {"saat", 7}, {"aath", 8}, {"nau", 9}, {"das", 10}, {"dus", 10}, {"barah", 12}, {"baarah", 12},
     {"pandrah", 15}, {"bees", 20}, {"pachees", 25}, {"pachis", 25}, {"pachchis", 25},
-    {"tees", 30}, {"chalis", 40}, {"pachas", 50},
+    {"tees", 30}, {"chalis", 40}, {"chaalis", 40}, {"pachas", 50}, {"pachaas", 50},
     {"एक", 1}, {"दो", 2}, {"तीन", 3}, {"चार", 4}, {"पांच", 5}, {"पाँच", 5}, {"छह", 6},
     {"सात", 7}, {"आठ", 8}, {"नौ", 9}, {"दस", 10}, {"पंद्रह", 15}, {"बीस", 20},
     {"पच्चीस", 25}, {"तीस", 30}, {"चालीस", 40}, {"पचास", 50}, {"साठ", 60},
@@ -402,6 +402,25 @@ VoiceCommand ParseTimers(const Sentence& s) {
     return {};
 }
 
+// Answers to an announced reminder
+constexpr Words kAckCore = {"ok", "okay", "okk", "okey", "okie", "k", "thik", "theek", "thek",
+                            "tik", "done", "thanks", "thank", "thankyou", "sure", "alright",
+                            "fine", "noted", "haan", "han", "haa", "ha", "hmm", "acha", "accha",
+                            "achha", "achchha", "bas", "chup", "band", "bandh", "stop", "yes",
+                            "yeah", "yep", "got", "understood", "shukriya", "dhanyavad",
+                            "dhanyawad", "enough", "quiet", "silent", "ओके", "ठीक", "हाँ", "हां",
+                            "अच्छा", "बस", "चुप", "बंद", "धन्यवाद", "शुक्रिया"};
+constexpr Words kAckFiller = {"hai", "hain", "he", "h", "ji", "jee", "karo", "kar", "kardo",
+                              "do", "it", "please", "pls", "you", "ho", "gaya", "gya", "gayi",
+                              "liya", "li", "le", "raho", "rahiye", "ab", "now", "alexa", "very",
+                              "much", "so", "that", "is", "i", "will", "remember", "samajh",
+                              "samjh", "dost", "na", "मैं", "है", "जी", "करो", "रहो", "हो", "गया",
+                              "ठीक", "अब"};
+constexpr Words kRemindAgainWords = {"remind", "reminder", "yaad", "dilana", "dilao", "dila",
+                                     "dilaana", "dilaiye", "snooze", "again", "phir", "fir",
+                                     "firse", "phirse", "later", "baad", "bad", "after", "aur",
+                                     "more", "याद", "बाद", "फिर"};
+
 VoiceShortcut ParseTicking(const Sentence& s) {
     if (!s.Has(kTickWords) && !s.HasPhrase(kTickPhrases)) return VoiceShortcut::None;
     if (s.Has(kTickOffWords)) return VoiceShortcut::TickingOff;
@@ -477,6 +496,26 @@ VoiceCommand ParseVoiceCommand(const std::string& raw) {
 }
 
 VoiceShortcut ParseVoiceShortcut(const std::string& raw) { return ParseVoiceCommand(raw).type; }
+
+ReminderReply ParseReminderReply(const std::string& raw, int& seconds) {
+    seconds = 0;
+    const Sentence s(NormalizeSpeech(raw));
+    if (s.size() == 0 || s.size() > kMaxShortcutWords) return ReminderReply::None;
+    // "remind me after 10 minutes", "10 minute baad yaad dilana", "snooze 5 minutes"
+    const int duration = DurationOf(s);
+    if (duration > 0 && duration <= 24 * 3600 && s.Has(kRemindAgainWords)) {
+        seconds = duration;
+        return ReminderReply::Snooze;
+    }
+    // "okay", "thik hai", "chup raho", "band karo", "got it, thanks"
+    if (s.size() <= 6 && s.Has(kAckCore) && s.OnlyFrom(kAckCore, kAckFiller)) {
+        return ReminderReply::Acknowledge;
+    }
+    if (s.size() <= 6 && (s.Has(kQuietWords) || s.HasPhrase(kQuietPhrases))) {
+        return ReminderReply::Acknowledge;  // "shut up", "stop talking"
+    }
+    return ReminderReply::None;
+}
 
 const char* VoiceShortcutName(VoiceShortcut shortcut) {
     switch (shortcut) {

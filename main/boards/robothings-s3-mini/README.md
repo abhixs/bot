@@ -74,6 +74,20 @@ Commands are recognised from their key words, so natural variations work.
     standby), a soft "tick ... tock" plays once per second. On by default; "turn off
     the ticking sound" / "ticking sound off karo" and "ticking sound on karo" switch it
     (saved).
+- **Reminders** ("remind me to drink water after 30 minutes", "kal subah 8 baje dawai
+  lene ka yaad dilana", "remind me to call Rahul at 6 PM", daily / weekly ones): the
+  AI sets them with the `self.reminder.*` tools and asks when the message or time is
+  missing. They are saved in flash. When one is due (in standby, after any running
+  conversation or alarm) the notification sound plays for about 4 s, the assistant
+  says "Reminder, <message>" and listens without a wake word: "okay", "thik hai",
+  "chup raho", "band karo" end it with the standby beep; "remind me after 10 minutes"
+  / "5 minute baad yaad dilana" sets it again and the assistant confirms; anything
+  unclear is answered by the AI (it asks to repeat); silence ends with the usual
+  listening timeout. Several due together are announced one after another. "What
+  reminders do I have?", "cancel my water reminder", "change my reminder to 9 AM".
+  A reminder cannot ring while the device is off: one missed then is announced once
+  as "Missed reminder from HH:MM" when it is back on. The spoken part needs the
+  server (no internet: the sound plays, the message is tried again up to 3 times).
 - **Alarms / timers**: each ring lasts 20 seconds. Only for an alarm set an hour or
   more ahead (and repeating alarms): when nobody answers, a 10-minute snooze starts
   (its countdown shows on the screen) and then it rings again, three rings in all (the

@@ -204,7 +204,8 @@ void AlarmManager::RegisterTools() {
         "'alarm at 6:30 every weekday'.\n"
         "repeat: 'once' (default, next occurrence of that time), 'daily', 'weekdays', "
         "'weekends', or a comma list of days such as 'mon,wed,fri'.\n"
-        "turn_on_lamp: also switch the lamp relay on when the alarm rings.",
+        "turn_on_lamp: also switch the lamp relay on when the alarm rings. (To be reminded "
+        "of something - 'remind me to ...', '... yaad dilana' - use self.reminder.create.)",
         PropertyList({
             Property("hour", kPropertyTypeInteger, 0, 23),
             Property("minute", kPropertyTypeInteger, 0, 0, 59),
@@ -259,7 +260,8 @@ void AlarmManager::RegisterTools() {
         "self.alarm.set_timer",
         "Start a countdown timer on the device, e.g. 'set a 10 minute timer', 'remind me in "
         "30 seconds'. (For a Pomodoro use self.pomodoro.start; for counting up use "
-        "self.stopwatch.control.) Give the duration as minutes and/or seconds. A timer under "
+        "self.stopwatch.control; for 'remind me to ... after N minutes' use "
+        "self.reminder.create.) Give the duration as minutes and/or seconds. A timer under "
         "31 minutes shows its countdown on the screen at once.",
         PropertyList({
             Property("minutes", kPropertyTypeInteger, 0, 0, 1440),

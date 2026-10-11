@@ -58,3 +58,11 @@ VoiceShortcut ParseVoiceShortcut(const std::string& text);  // ParseVoiceCommand
 int ParseDuration(const std::string& normalized_text);
 
 const char* VoiceShortcutName(VoiceShortcut shortcut);
+
+// The user's answer right after a reminder was announced.
+enum class ReminderReply {
+    None,         // anything else: the AI answers (e.g. asks to repeat)
+    Acknowledge,  // "okay", "thik hai", "chup raho", "band karo", "got it", "thanks"
+    Snooze,       // "remind me after 10 minutes", "5 minute baad yaad dilana" (seconds)
+};
+ReminderReply ParseReminderReply(const std::string& text, int& seconds);

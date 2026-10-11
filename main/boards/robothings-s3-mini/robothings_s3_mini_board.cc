@@ -1,6 +1,7 @@
 // RoboThings S3 Mini: ESP32-S3 Super Mini Zero voice assistant with animated
 // robot eyes on a 128x64 OLED, a lamp relay and voice-set alarms / timers.
 #include "alarm_manager.h"
+#include "alarm_schedule.h"
 #include "application.h"
 #include "assets/lang_config.h"
 #include "button.h"
@@ -12,6 +13,7 @@
 #include "music_player.h"
 #include "pomodoro.h"
 #include "popdown_sound.h"
+#include "reminder_manager.h"
 #include "robo_sounds.h"
 #include "robo_audio_codec.h"
 #include "robo_eyes_display.h"
@@ -175,12 +177,125 @@ private:
         tick_waiting_ = false;
     }
 
+    // Reminders (see reminder_manager.h), announced one at a time from standby:
+    //   Chime  - the notification sound, 5 x ~0.8 s (about 4 s)
+    //   Speak  - a conversation opened with a prompt: the assistant says
+    //            "Reminder, <message>" and listening follows (no wake word)
+    //   Await  - the user's answer: okay / stop -> standby; "remind me after N
+    //            minutes" -> snoozed, the AI confirms, standby; anything else -> the
+    //            AI (asks to repeat). Over once the device is back in standby.
+    enum class ReminderPhase { Idle, Chime, Speak, Await };
+    static constexpr int kReminderChimes = 5;
+    static constexpr const char* kReminderMarker = "(Device reminder";
+    ReminderPhase reminder_phase_ = ReminderPhase::Idle;
+    ReminderManager::Due reminder_;
+    int64_t reminder_since_us_ = 0;
+    int64_t reminder_next_try_us_ = 0;
+    int64_t standby_since_us_ = 0;  // when the device last became idle (0 = not idle)
+    bool reminder_channel_opened_ = false;
+
+    std::string ReminderPrompt(const ReminderManager::Due& due) const {
+        std::string line = "Reminder, " + due.message + ".";
+        if (due.missed) {
+            line = "Missed reminder from " +
+                   alarm_schedule::FormatClock(static_cast<time_t>(due.due_at)).substr(4) + ": " +
+                   due.message + ".";
+        }
+        return std::string(kReminderMarker) +
+               ", not the user speaking.) Say exactly this and nothing more: \"" + line +
+               "\" Then listen to my answer. If I ask to be reminded again after some time, "
+               "the device has already rescheduled it: confirm in one short sentence (e.g. "
+               "'Okay, 10 minute baad yaad dilaungi.') and do not call any tool. If my answer is "
+               "unclear, ask me in a few words to repeat it.";
+    }
+
+    // Main task, from the conversation watcher (every 50 ms).
+    void UpdateReminders(DeviceState state) {
+        auto& app = Application::GetInstance();
+        auto& reminders = ReminderManager::GetInstance();
+        const int64_t now = esp_timer_get_time();
+        if (state == kDeviceStateIdle) {
+            if (standby_since_us_ == 0) standby_since_us_ = now;
+        } else {
+            standby_since_us_ = 0;
+        }
+        switch (reminder_phase_) {
+            case ReminderPhase::Idle: {
+                // Only from a settled standby: no conversation, alarm or standby beep.
+                if (now < reminder_next_try_us_ || state != kDeviceStateIdle ||
+                    now - standby_since_us_ < 1500 * 1000 ||
+                    AlarmManager::GetInstance().IsRinging() ||
+                    !app.GetAudioService().IsPlaybackIdle()) {
+                    return;
+                }
+                if (!reminders.PeekDue(reminder_)) return;
+                ESP_LOGI(TAG, "Announcing reminder %d: %s", reminder_.id,
+                         reminder_.message.c_str());
+                MusicPlayer::GetInstance().Stop();
+                StopTicking();
+                for (int i = 0; i < kReminderChimes; i++) {
+                    app.PlaySound(Lang::Sounds::OGG_VIBRATION);
+                }
+                reminder_phase_ = ReminderPhase::Chime;
+                reminder_since_us_ = now;
+                return;
+            }
+            case ReminderPhase::Chime:
+                if (state != kDeviceStateIdle) {
+                    // The user started talking: announce it once they are done.
+                    reminder_phase_ = ReminderPhase::Idle;
+                    reminder_next_try_us_ = now + 3 * 1000000LL;
+                    return;
+                }
+                if (now - reminder_since_us_ < 3500 * 1000 ||
+                    !app.GetAudioService().IsPlaybackIdle()) {
+                    return;
+                }
+                reminder_phase_ = ReminderPhase::Speak;
+                reminder_since_us_ = now;
+                reminder_channel_opened_ = false;
+                app.InvokeWithText(ReminderPrompt(reminder_));
+                return;
+            case ReminderPhase::Speak:
+                if (state == kDeviceStateListening) reminder_channel_opened_ = true;
+                if (state == kDeviceStateSpeaking) {
+                    // It is being said: done for good (never announced twice).
+                    reminders.MarkAnnounced(reminder_.id, reminder_.due_at);
+                    reminder_phase_ = ReminderPhase::Await;
+                    user_turn_seen_ = true;  // not the server's inactivity goodbye
+                    return;
+                }
+                if ((state == kDeviceStateIdle && now - reminder_since_us_ > 3 * 1000000LL) ||
+                    now - reminder_since_us_ > 25 * 1000000LL) {
+                    if (reminder_channel_opened_) {
+                        // The assistant got it but did not speak: do not loop on it.
+                        ESP_LOGW(TAG, "Reminder %d: no spoken answer", reminder_.id);
+                        reminders.MarkAnnounced(reminder_.id, reminder_.due_at);
+                        reminder_phase_ = state == kDeviceStateIdle ? ReminderPhase::Idle
+                                                                   : ReminderPhase::Await;
+                    } else {
+                        ESP_LOGW(TAG, "Reminder %d: assistant not reachable", reminder_.id);
+                        reminders.MarkFailed(reminder_.id, reminder_.due_at);
+                        reminder_phase_ = ReminderPhase::Idle;
+                    }
+                    reminder_next_try_us_ = now + 60 * 1000000LL;
+                }
+                return;
+            case ReminderPhase::Await:
+                if (state == kDeviceStateIdle) {
+                    reminder_phase_ = ReminderPhase::Idle;
+                    reminder_next_try_us_ = now + 2 * 1000000LL;  // the next one, if any
+                }
+                return;
+        }
+    }
+
     // Main task, from the conversation watcher (every 50 ms).
     void UpdateTicking(DeviceState state) {
         int value = -1;
         bool want = false;
         if (ticking_enabled_ && eyes_display_ != nullptr && state == kDeviceStateIdle &&
-            !AlarmManager::GetInstance().IsRinging()) {
+            reminder_phase_ == ReminderPhase::Idle && !AlarmManager::GetInstance().IsRinging()) {
             const DisplayScreen screen = eyes_display_->shown_screen();
             if (screen == DisplayScreen::Countdown) {
                 value = AlarmManager::GetInstance().SecondsToNextTimer();
@@ -292,8 +407,29 @@ private:
     // speech-to-text result so they act at once and the AI does not answer them.
     void HandleUserSpeech(const std::string& text) {
         user_turn_seen_ = true;
+        if (text.find(kReminderMarker) != std::string::npos) {
+            return;  // our own reminder prompt, echoed back by the server
+        }
         assistant_sentences_ = 0;
         short_sorry_ = false;
+        if (reminder_phase_ == ReminderPhase::Await) {
+            int seconds = 0;
+            switch (ParseReminderReply(text, seconds)) {
+                case ReminderReply::Acknowledge:
+                    ESP_LOGI(TAG, "Reminder acknowledged (%s)", text.c_str());
+                    GoStandby();  // silent, then the standby beep
+                    return;
+                case ReminderReply::Snooze:
+                    if (ReminderManager::GetInstance().Snooze(reminder_.message, seconds) > 0) {
+                        ESP_LOGI(TAG, "Reminder snoozed for %d s (%s)", seconds, text.c_str());
+                        action_pending_ = true;  // the AI confirms briefly, then standby
+                        return;
+                    }
+                    break;
+                case ReminderReply::None:
+                    break;  // the AI answers (asks to repeat if unclear)
+            }
+        }
         const VoiceCommand command = ParseVoiceCommand(text);
         if (command.type == VoiceShortcut::None) return;
         let_ai_reply_ = false;
@@ -553,6 +689,7 @@ private:
                                   app.GetAudioService().SetOutputTaskPriority(6);
         }
         Pomodoro::GetInstance().CheckTimer();
+        UpdateReminders(state);
         UpdateTicking(state);
 
         // A cut "not understood" reply: unmute and say "hm?" once it is over.
@@ -807,6 +944,7 @@ private:
             if (!info.is_timer) GoStandby(StandbyStyle::Quiet);
         });
         alarms.Initialize();
+        ReminderManager::GetInstance().Initialize();
 
         auto& pomodoro = Pomodoro::GetInstance();
         pomodoro.OnPhaseStart([this](Pomodoro::Phase) {
