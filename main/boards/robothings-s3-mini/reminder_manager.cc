@@ -237,7 +237,7 @@ bool ReminderManager::MarkFailed(int id, int64_t due_at) {
     return false;
 }
 
-int ReminderManager::Snooze(const std::string& message, int seconds) {
+int ReminderManager::AddIn(const std::string& message, int seconds) {
     const time_t now = time(nullptr);
     if (!alarm_schedule::IsTimeValid(now) || seconds <= 0) return -1;
     std::lock_guard<std::mutex> lock(mutex_);
@@ -252,7 +252,7 @@ int ReminderManager::Snooze(const std::string& message, int seconds) {
     reminders_.push_back(r);
     SaveLocked();
     last_snooze_us_ = esp_timer_get_time();
-    ESP_LOGI(TAG, "Reminder %d snoozed for %d s: %s", r.id, seconds, r.message.c_str());
+    ESP_LOGI(TAG, "Reminder %d set by the device for %d s: %s", r.id, seconds, r.message.c_str());
     return r.id;
 }
 
@@ -294,25 +294,17 @@ void ReminderManager::RegisterTools() {
 
     mcp.AddTool(
         "self.reminder.create",
-        "Create a spoken reminder on the device: at the time it plays the notification sound "
-        "and says 'Reminder, <message>'. Use for 'remind me to ...', '... yaad dilana', "
-        "'remind me to drink water after 30 minutes', 'kal subah 8 baje yaad dilana', "
-        "'remind me to call Rahul at 6 PM', daily or weekly reminders (not alarms or timers).\n"
-        "message: what to remind about, short (2-6 words) in the user's language, e.g. "
-        "'drink water', 'call Rahul', 'dawai lena'.\n"
-        "When: EITHER minutes_from_now (relative: 'after 30 minutes', 'in 2 hours' = 120) OR "
-        "time as 24-hour HH:MM ('6 PM' = 18:00, 'subah 8 baje' = 08:00), with optional day "
-        "('today', 'tomorrow' (kal), 'day after tomorrow', a weekday name or YYYY-MM-DD; "
-        "without a day the next time it comes round) and repeat ('once' default, 'daily', "
-        "'weekdays', 'weekends', 'weekly', or e.g. 'mon,thu').\n"
-        "IMPORTANT: if the message or the time is missing or unclear (e.g. 'kal subah 8 baje "
-        "yaad dilana' has no message, '8 baje' could be morning or evening), ask the user "
-        "first; never guess. Reminders ring only while the device is on; one missed while it "
-        "was off is announced when it is back on. After creating, confirm in one short "
-        "sentence.",
+        "ALWAYS use for 'remind me ...' / '... yaad dilana' (never a timer or alarm for these): "
+        "at the time the device says 'Reminder, <message>'. message: 2-6 words in the user's "
+        "language ('drink water', 'Rahul ko call'). When: minutes_from_now and/or "
+        "seconds_from_now ('30 sec me' = seconds 30), OR time HH:MM 24h ('6 PM' = 18:00) with "
+        "optional day (today/tomorrow/weekday/YYYY-MM-DD) and repeat (once/daily/weekdays/"
+        "weekends/weekly/'mon,thu'). If the message or time is missing or unclear ('kal 8 "
+        "baje' - morning or evening?), ask first; never guess. Confirm in one short sentence.",
         PropertyList({
             Property("message", kPropertyTypeString, std::string("")).SetMaxLength(80),
             Property("minutes_from_now", kPropertyTypeInteger, 0, 0, 10080),
+            Property("seconds_from_now", kPropertyTypeInteger, 0, 0, 3600),
             Property("time", kPropertyTypeString, std::string("")).SetMaxLength(12),
             Property("day", kPropertyTypeString, std::string("")).SetMaxLength(20),
             Property("repeat", kPropertyTypeString, std::string("once")).SetMaxLength(30),
@@ -337,7 +329,9 @@ void ReminderManager::RegisterTools() {
             }
             reminder_schedule::When when;
             std::string error;
-            if (!reminder_schedule::Resolve(now, properties["minutes_from_now"].value<int>(),
+            const int from_now = properties["minutes_from_now"].value<int>() * 60 +
+                                 properties["seconds_from_now"].value<int>();
+            if (!reminder_schedule::Resolve(now, from_now,
                                             properties["time"].value<std::string>(),
                                             properties["day"].value<std::string>(),
                                             properties["repeat"].value<std::string>(), when,
@@ -384,9 +378,8 @@ void ReminderManager::RegisterTools() {
 
     mcp.AddTool(
         "self.reminder.list",
-        "List the reminders on the device (id, message, next time, repeat) and the device's "
-        "current local date and time. Use for 'what reminders do I have', 'mere reminders "
-        "batao', and before editing or cancelling one to find its id.",
+        "List reminders (id, message, next time, repeat) and the device time. 'What reminders "
+        "do I have'; also before editing / cancelling one.",
         PropertyList(), [this](const PropertyList&) -> ToolResult { return ListJson(); });
 
     mcp.AddTool(
@@ -464,6 +457,7 @@ void ReminderManager::RegisterTools() {
             const int id = properties["id"].value<int>();
             const std::string message = CleanMessage(properties["message"].value<std::string>());
             const int minutes = properties["minutes_from_now"].value<int>();
+            const int from_now = minutes * 60;
             const std::string clock = properties["time"].value<std::string>();
             const std::string day = properties["day"].value<std::string>();
             const std::string repeat = properties["repeat"].value<std::string>();
@@ -487,7 +481,7 @@ void ReminderManager::RegisterTools() {
                                                    : alarm_schedule::RepeatToString(it->days));
                 reminder_schedule::When when;
                 std::string error;
-                if (!reminder_schedule::Resolve(now, minutes, use_clock, day, use_repeat, when,
+                if (!reminder_schedule::Resolve(now, from_now, use_clock, day, use_repeat, when,
                                                 error)) {
                     return std::unexpected(error);
                 }

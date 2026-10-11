@@ -5,6 +5,7 @@
 #include "device_action.h"
 #include "application.h"
 #include "mcp_server.h"
+#include "reminder_manager.h"
 #include "settings.h"
 
 #include <cJSON.h>
@@ -274,6 +275,12 @@ void AlarmManager::RegisterTools() {
             if (!alarm_schedule::IsTimeValid(now)) {
                 return std::unexpected(
                     std::string("Device clock is not synced yet; try again in a moment."));
+            }
+            if (ReminderManager::GetInstance().AddedByDeviceRecently()) {
+                // "Remind me to X after N minutes" was already set as a reminder.
+                return std::string(
+                    "{\"success\":true,\"note\":\"Set as a reminder by the device. Just "
+                    "confirm in one short sentence.\"}");
             }
             int total = properties["minutes"].value<int>() * 60 + properties["seconds"].value<int>();
             if (total < 5) {

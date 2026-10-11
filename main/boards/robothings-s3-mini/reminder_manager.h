@@ -63,9 +63,14 @@ public:
     // It could not be announced (no connection): try later, or drop it after
     // kMaxAttempts. Returns true if it stays queued.
     bool MarkFailed(int id, int64_t due_at);
-    // "Remind me again after N minutes" right after an announcement: a one-time
-    // reminder with the same message. Returns its id, or -1.
-    int Snooze(const std::string& message, int seconds);
+    // A one-time reminder in `seconds` set by the device itself: "remind me again
+    // after N minutes" right after an announcement, or "remind me to X after N
+    // minutes" understood on the device. Returns its id, or -1.
+    int AddIn(const std::string& message, int seconds);
+    // The device set one a moment ago (the AI must not set it a second time).
+    bool AddedByDeviceRecently() const {
+        return last_snooze_us_ != 0 && esp_timer_get_time() - last_snooze_us_ < 30 * 1000000LL;
+    }
 
 private:
     ReminderManager() = default;

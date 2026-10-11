@@ -112,23 +112,23 @@ struct When {
     int minute = 0;
 };
 
-// Works out when a reminder rings. Exactly one of `minutes_from_now` (> 0) or
+// Works out when a reminder rings. Exactly one of `seconds_from_now` (> 0) or
 // `clock` must be given; `day` and `repeat` only go with `clock`. On failure
 // returns false with a short reason for the AI in `error`.
-inline bool Resolve(time_t now, int minutes_from_now, const std::string& clock,
+inline bool Resolve(time_t now, int seconds_from_now, const std::string& clock,
                     const std::string& day, const std::string& repeat, When& out,
                     std::string& error) {
     const bool has_clock = !Lower(clock).empty();
-    if (minutes_from_now > 0 && has_clock) {
-        error = "Give either minutes_from_now or time, not both.";
+    if (seconds_from_now > 0 && has_clock) {
+        error = "Give either a time from now or a clock time, not both.";
         return false;
     }
-    if (minutes_from_now > 0) {
+    if (seconds_from_now > 0) {
         if (!Lower(day).empty() || (!Lower(repeat).empty() && Lower(repeat) != "once")) {
-            error = "minutes_from_now cannot have a day or a repeat; use time instead.";
+            error = "A time from now cannot have a day or a repeat; use time instead.";
             return false;
         }
-        out.fire_at = static_cast<int64_t>(now) + static_cast<int64_t>(minutes_from_now) * 60;
+        out.fire_at = static_cast<int64_t>(now) + static_cast<int64_t>(seconds_from_now);
         out.days = 0;
         int wday;
         int64_t day_index;
@@ -137,7 +137,7 @@ inline bool Resolve(time_t now, int minutes_from_now, const std::string& clock,
         return true;
     }
     if (!has_clock) {
-        error = "When? Ask the user for the time (or how many minutes from now).";
+        error = "When? Ask the user for the time (or how long from now).";
         return false;
     }
     int hour, minute;

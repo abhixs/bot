@@ -256,14 +256,20 @@ private:
         Application::GetInstance().InvokeWithText("");
     }
 
-    static std::string SnoozeConfirmation(int seconds) {
-        if (seconds % 3600 == 0) {
-            const int hours = seconds / 3600;
-            return "ठीक है, " + std::to_string(hours) + (hours == 1 ? " घंटे" : " घंटे") +
-                   " बाद याद दिला दूँगी।";
+    // "ठीक है, 30 सेकंड / 10 मिनट / 2 घंटे बाद याद दिला दूँगी।"
+    static std::string ReminderConfirmation(int seconds) {
+        std::string when;
+        if (seconds < 60) {
+            when = std::to_string(seconds) + " सेकंड";
+        } else if (seconds % 3600 == 0) {
+            when = std::to_string(seconds / 3600) + " घंटे";
+        } else if (seconds % 60 == 0 || seconds > 600) {
+            when = std::to_string((seconds + 30) / 60) + " मिनट";
+        } else {
+            when = std::to_string(seconds / 60) + " मिनट " + std::to_string(seconds % 60) +
+                   " सेकंड";
         }
-        return "ठीक है, " + std::to_string(std::max(1, seconds / 60)) +
-               " मिनट बाद याद दिला दूँगी।";
+        return "ठीक है, " + when + " बाद याद दिला दूँगी।";
     }
 
     // Main task, from the conversation watcher (every 50 ms).
@@ -520,6 +526,7 @@ private:
     // Local voice shortcuts (see voice_shortcuts.h), handled on the device from the
     // speech-to-text result so they act at once and the AI does not answer them.
     void HandleUserSpeech(const std::string& text) {
+        ESP_LOGI(TAG, "User said: %s", text.c_str());
         user_turn_seen_ = true;
         assistant_sentences_ = 0;
         short_sorry_ = false;
@@ -535,9 +542,9 @@ private:
                     GoStandby();  // silent, then the standby beep
                     return;
                 case ReminderReply::Snooze:
-                    if (ReminderManager::GetInstance().Snooze(reminder_.message, seconds) > 0) {
+                    if (ReminderManager::GetInstance().AddIn(reminder_.message, seconds) > 0) {
                         ESP_LOGI(TAG, "Reminder snoozed for %d s (%s)", seconds, text.c_str());
-                        ReplyInStandby({{SnoozeConfirmation(seconds), "hi"}}, AfterReply::Beep);
+                        ReplyInStandby({{ReminderConfirmation(seconds), "hi"}}, AfterReply::Beep);
                         return;
                     }
                     break;
@@ -554,6 +561,18 @@ private:
                 GoStandby();
             }
             return;
+        }
+        {
+            // "remind me to X after N minutes": set here, confirmed by the device.
+            int seconds = 0;
+            std::string message;
+            if (ParseReminderRequest(text, seconds, message) &&
+                ReminderManager::GetInstance().AddIn(message, seconds) > 0) {
+                ESP_LOGI(TAG, "Reminder set on the device: '%s' in %d s", message.c_str(),
+                         seconds);
+                ReplyInStandby({{ReminderConfirmation(seconds), "hi"}}, AfterReply::Beep);
+                return;
+            }
         }
         const VoiceCommand command = ParseVoiceCommand(text);
         if (command.type == VoiceShortcut::None) return;
@@ -1030,6 +1049,10 @@ private:
     }
 
     void InitializeTools() {
+        // Reminders and news first: right after the common tools in the list the AI
+        // gets, so they are never cut off when it reads only part of a long list.
+        ReminderManager::GetInstance().Initialize();
+        RegisterNewsTools();
         lamp_ = new RelayLamp(LAMP_GPIO);
         // Keep the words said right after the wake word (while the connection opens)
         // and send them first, so the server hears the whole sentence.
@@ -1083,8 +1106,6 @@ private:
             if (!info.is_timer) GoStandby(StandbyStyle::Quiet);
         });
         alarms.Initialize();
-        ReminderManager::GetInstance().Initialize();
-        RegisterNewsTools();
 
         auto& pomodoro = Pomodoro::GetInstance();
         pomodoro.OnPhaseStart([this](Pomodoro::Phase) {

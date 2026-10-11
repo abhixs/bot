@@ -11,6 +11,7 @@
 #include <esp_mp3_dec.h>
 
 #include <algorithm>
+#include <cstdlib>
 #include <cstring>
 #include <memory>
 
@@ -166,6 +167,85 @@ DeviceTts::Result DeviceTts::Run(Job& job) {
     return Result::kOk;
 }
 
+// Decodes a whole MP3 answer to mono PCM at `out_rate`. False if nothing decoded.
+static bool DecodeMp3(const std::string& mp3, int out_rate, std::vector<int16_t>& pcm) {
+    void* decoder = nullptr;
+    if (esp_mp3_dec_open(nullptr, 0, &decoder) != ESP_AUDIO_ERR_OK || decoder == nullptr) {
+        return false;
+    }
+    std::unique_ptr<PcmResampler> resampler;
+    std::vector<uint8_t> pcm_bytes(1152 * 2 * sizeof(int16_t));
+    std::vector<int16_t> mono;
+    const auto* data = reinterpret_cast<const uint8_t*>(mp3.data());
+    size_t offset = 0;
+    while (offset < mp3.size()) {
+        mp3::FrameInfo frame;
+        size_t skip = 0;
+        auto found = mp3::FindFrame(data + offset, mp3.size() - offset, frame, skip);
+        if (found == mp3::FindResult::kSkip) {
+            offset += std::max<size_t>(1, std::min(skip, mp3.size() - offset));
+            continue;
+        }
+        if (found == mp3::FindResult::kNeedMoreData) {
+            // The last frame has no next header to confirm it.
+            if (!(mp3.size() - offset >= 4 && mp3::ParseHeader(data + offset, frame) &&
+                  mp3.size() - offset >= frame.length)) {
+                break;
+            }
+        }
+        esp_audio_dec_in_raw_t raw = {
+            .buffer = const_cast<uint8_t*>(data + offset),
+            .len = static_cast<uint32_t>(frame.length),
+            .consumed = 0,
+            .frame_recover = ESP_AUDIO_DEC_RECOVERY_NONE,
+        };
+        esp_audio_dec_out_frame_t out = {
+            .buffer = pcm_bytes.data(),
+            .len = static_cast<uint32_t>(pcm_bytes.size()),
+            .needed_size = 0,
+            .decoded_size = 0,
+        };
+        esp_audio_dec_info_t info = {};
+        esp_audio_err_t ret = esp_mp3_dec_decode(decoder, &raw, &out, &info);
+        if (ret == ESP_AUDIO_ERR_BUFF_NOT_ENOUGH && out.needed_size > pcm_bytes.size()) {
+            pcm_bytes.resize(out.needed_size);
+            continue;  // the same frame again with a bigger buffer
+        }
+        offset += frame.length;
+        if (ret != ESP_AUDIO_ERR_OK || out.decoded_size == 0 || info.sample_rate == 0) {
+            continue;  // skip a damaged frame
+        }
+        const int channels = std::max<int>(1, info.channel);
+        const size_t frames = out.decoded_size / sizeof(int16_t) / channels;
+        const auto* samples = reinterpret_cast<const int16_t*>(pcm_bytes.data());
+        mono.resize(frames);
+        for (size_t i = 0; i < frames; i++) {
+            int sum = 0;
+            for (int c = 0; c < channels; c++) sum += samples[i * channels + c];
+            mono[i] = static_cast<int16_t>(sum / channels);
+        }
+        if (!resampler || resampler->in_rate() != static_cast<int>(info.sample_rate)) {
+            resampler = std::make_unique<PcmResampler>(info.sample_rate, out_rate);
+        }
+        resampler->Process(mono.data(), mono.size(), pcm);
+    }
+    esp_mp3_dec_close(decoder);
+    return !pcm.empty();
+}
+
+// The voice service speaks quietly: bring the peak up to about -2 dBFS (at most
+// x6), so it is as loud as the assistant's own voice at the same volume setting.
+static void Normalize(std::vector<int16_t>& pcm) {
+    int peak = 0;
+    for (int16_t v : pcm) peak = std::max(peak, std::abs(static_cast<int>(v)));
+    if (peak < 64) return;
+    const float gain = std::min(6.0f, 26000.0f / peak);
+    if (gain <= 1.05f) return;
+    for (auto& v : pcm) {
+        v = static_cast<int16_t>(std::clamp(v * gain, -32767.0f, 32767.0f));
+    }
+}
+
 DeviceTts::Result DeviceTts::SpeakLine(const Line& line) {
     auto& audio = Application::GetInstance().GetAudioService();
     const int out_rate = Board::GetInstance().GetAudioCodec()->output_sample_rate();
@@ -174,91 +254,24 @@ DeviceTts::Result DeviceTts::SpeakLine(const Line& line) {
         std::string mp3;
         if (!Download(TtsUrl(piece, line.lang), mp3)) return Result::kFailed;
         if (cancel_.load()) return Result::kCancelled;
-
-        void* decoder = nullptr;
-        if (esp_mp3_dec_open(nullptr, 0, &decoder) != ESP_AUDIO_ERR_OK || decoder == nullptr) {
-            return Result::kFailed;
-        }
-        std::unique_ptr<PcmResampler> resampler;
-        std::vector<uint8_t> pcm_bytes(1152 * 2 * sizeof(int16_t));
-        std::vector<int16_t> mono;
-        std::vector<int16_t> pending;
-        const size_t push_samples = static_cast<size_t>(out_rate) / 2;
-        Result result = Result::kOk;
-        bool any = false;
-        const auto* data = reinterpret_cast<const uint8_t*>(mp3.data());
-        size_t offset = 0;
-        while (offset < mp3.size()) {
-            mp3::FrameInfo frame;
-            size_t skip = 0;
-            auto found = mp3::FindFrame(data + offset, mp3.size() - offset, frame, skip);
-            if (found == mp3::FindResult::kSkip) {
-                offset += std::max<size_t>(1, std::min(skip, mp3.size() - offset));
-                continue;
-            }
-            if (found == mp3::FindResult::kNeedMoreData) {
-                // The last frame has no next header to confirm it.
-                if (!(mp3.size() - offset >= 4 && mp3::ParseHeader(data + offset, frame) &&
-                      mp3.size() - offset >= frame.length)) {
-                    break;
-                }
-            }
-            esp_audio_dec_in_raw_t raw = {
-                .buffer = const_cast<uint8_t*>(data + offset),
-                .len = static_cast<uint32_t>(frame.length),
-                .consumed = 0,
-                .frame_recover = ESP_AUDIO_DEC_RECOVERY_NONE,
-            };
-            esp_audio_dec_out_frame_t out = {
-                .buffer = pcm_bytes.data(),
-                .len = static_cast<uint32_t>(pcm_bytes.size()),
-                .needed_size = 0,
-                .decoded_size = 0,
-            };
-            esp_audio_dec_info_t info = {};
-            esp_audio_err_t ret = esp_mp3_dec_decode(decoder, &raw, &out, &info);
-            if (ret == ESP_AUDIO_ERR_BUFF_NOT_ENOUGH && out.needed_size > pcm_bytes.size()) {
-                pcm_bytes.resize(out.needed_size);
-                continue;  // the same frame again with a bigger buffer
-            }
-            offset += frame.length;
-            if (ret != ESP_AUDIO_ERR_OK || out.decoded_size == 0 || info.sample_rate == 0) {
-                continue;  // skip a damaged frame
-            }
-            const int channels = std::max<int>(1, info.channel);
-            const size_t frames = out.decoded_size / sizeof(int16_t) / channels;
-            const auto* samples = reinterpret_cast<const int16_t*>(pcm_bytes.data());
-            mono.resize(frames);
-            for (size_t i = 0; i < frames; i++) {
-                int sum = 0;
-                for (int c = 0; c < channels; c++) sum += samples[i * channels + c];
-                mono[i] = static_cast<int16_t>(sum / channels);
-            }
-            if (!resampler || resampler->in_rate() != static_cast<int>(info.sample_rate)) {
-                resampler = std::make_unique<PcmResampler>(info.sample_rate, out_rate);
-            }
-            resampler->Process(mono.data(), mono.size(), pending);
-            any = true;
-            if (pending.size() >= push_samples) {
-                if (!WaitForRelease() ||
-                    !audio.PushPcmToPlaybackQueue(std::move(pending), true)) {
-                    result = Result::kCancelled;
-                    break;
-                }
-                pending = std::vector<int16_t>();
-            }
-        }
-        if (result == Result::kOk && !pending.empty()) {
-            if (!WaitForRelease() || !audio.PushPcmToPlaybackQueue(std::move(pending), true)) {
-                result = Result::kCancelled;
-            }
-        }
-        esp_mp3_dec_close(decoder);
-        if (result != Result::kOk) return result;
-        if (!any) {
+        // Decoded completely first, so playback never waits for the decoder (gaps).
+        std::vector<int16_t> pcm;
+        pcm.reserve(static_cast<size_t>(out_rate) * 6);
+        if (!DecodeMp3(mp3, out_rate, pcm)) {
             ESP_LOGW(TAG, "No audio in the voice answer (%u bytes)",
                      static_cast<unsigned>(mp3.size()));
             return Result::kFailed;
+        }
+        mp3 = std::string();
+        Normalize(pcm);
+        if (!WaitForRelease()) return Result::kCancelled;
+        // Queued in half-second blocks (the playback queue holds two).
+        const size_t block = static_cast<size_t>(out_rate) / 2;
+        for (size_t at = 0; at < pcm.size(); at += block) {
+            if (cancel_.load()) return Result::kCancelled;
+            const size_t end = std::min(pcm.size(), at + block);
+            std::vector<int16_t> part(pcm.begin() + at, pcm.begin() + end);
+            if (!audio.PushPcmToPlaybackQueue(std::move(part), true)) return Result::kCancelled;
         }
     }
     return Result::kOk;

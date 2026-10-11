@@ -69,3 +69,9 @@ enum class ReminderReply {
     Snooze,       // "remind me after 10 minutes", "5 minute baad yaad dilana" (seconds)
 };
 ReminderReply ParseReminderReply(const std::string& text, int& seconds);
+
+// "remind me to drink water after 30 minutes", "30 sec me yaad dilana ki pani pina
+// hai": a reminder in a while from now, with its message ("drink water", "pani
+// pina"). False for anything else (a clock time such as "6 baje", no message, ...),
+// which is left to the AI.
+bool ParseReminderRequest(const std::string& text, int& seconds, std::string& message);
