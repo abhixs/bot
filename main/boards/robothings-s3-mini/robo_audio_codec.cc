@@ -25,6 +25,18 @@ RoboAudioCodec::RoboAudioCodec(int input_sample_rate, int output_sample_rate,
     if (mic_ws != spk_ws) MirrorClock(mic_ws, I2S0O_WS_OUT_IDX);
     output_queue_ = static_cast<int64_t>(AUDIO_CODEC_DMA_DESC_NUM) * AUDIO_CODEC_DMA_FRAME_NUM *
                     kRefRate / output_sample_rate_;
+    // 100 Hz high-pass (RBJ biquad, Q 0.707) at the microphone rate.
+    {
+        const float w0 = 2.0f * static_cast<float>(M_PI) * 100.0f / input_sample_rate;
+        const float alpha = std::sin(w0) / (2.0f * 0.7071f);
+        const float cosw = std::cos(w0);
+        const float a0 = 1.0f + alpha;
+        hp_b0_ = (1.0f + cosw) / 2.0f / a0;
+        hp_b1_ = -(1.0f + cosw) / a0;
+        hp_b2_ = (1.0f + cosw) / 2.0f / a0;
+        hp_a1_ = -2.0f * cosw / a0;
+        hp_a2_ = (1.0f - alpha) / a0;
+    }
     // Microphone + playback reference, interleaved ("MR" for the AFE).
     input_reference_ = true;
     input_channels_ = 2;
@@ -58,9 +70,20 @@ int RoboAudioCodec::Write(const int16_t* data, int samples) {
         return 0;
     }
     const int16_t* out = data;
-    if (muted_.load()) {
+    const float target = muted_.load() ? 0.0f : 1.0f;
+    if (target == 0.0f && mute_gain_ == 0.0f) {
         silence_.assign(samples, 0);  // keep the I2S timing, play silence
         out = silence_.data();
+    } else if (target != mute_gain_) {
+        // Ramp over 5 ms instead of jumping: a hard cut is heard as a click.
+        const float step = 1.0f / (output_sample_rate_ / 200);
+        ramped_.resize(samples);
+        for (int i = 0; i < samples; ++i) {
+            if (mute_gain_ < target) mute_gain_ = std::min(target, mute_gain_ + step);
+            if (mute_gain_ > target) mute_gain_ = std::max(target, mute_gain_ - step);
+            ramped_[i] = static_cast<int16_t>(data[i] * mute_gain_);
+        }
+        out = ramped_.data();
     }
     // Recorded before the (blocking) write: the block leaves the speaker right after
     // what is already queued, or now if the output ran dry.
@@ -145,9 +168,27 @@ void RoboAudioCodec::PopReference(int16_t* dest, int samples, int stride) {
 int RoboAudioCodec::Read(int16_t* dest, int samples) {
     const int frames = samples / input_channels_;
     mic_.resize(frames);
-    const int got = NoAudioCodec::Read(mic_.data(), frames);
+    raw_.resize(frames);
+    size_t bytes_read = 0;
+    if (i2s_channel_read(rx_handle_, raw_.data(), frames * sizeof(int32_t), &bytes_read, 200) !=
+        ESP_OK) {
+        return 0;
+    }
+    const int got = static_cast<int>(bytes_read / sizeof(int32_t));
     if (got <= 0) {
         return 0;
+    }
+    for (int i = 0; i < got; ++i) {
+        // 24-bit sample in the top of the 32-bit slot -> 16 bits with headroom.
+        const float x = static_cast<float>(raw_[i] >> kMicShift);
+        if (x >= 32767.0f || x <= -32767.0f) ++clipped_;
+        const float y = hp_b0_ * x + hp_b1_ * hp_x1_ + hp_b2_ * hp_x2_ - hp_a1_ * hp_y1_ -
+                        hp_a2_ * hp_y2_;
+        hp_x2_ = hp_x1_;
+        hp_x1_ = x;
+        hp_y2_ = hp_y1_;
+        hp_y1_ = y;
+        mic_[i] = static_cast<int16_t>(std::clamp(y, -32767.0f, 32767.0f));
     }
     for (int i = 0; i < got; ++i) {
         dest[i * 2] = mic_[i];
@@ -160,8 +201,7 @@ int RoboAudioCodec::Read(int16_t* dest, int samples) {
 void RoboAudioCodec::UpdateMicStats(const int16_t* mic, int samples) {
     for (int i = 0; i < samples; ++i) {
         const int16_t v = static_cast<int16_t>(std::abs(static_cast<int>(mic[i])));
-        if (v > peak_) peak_ = v;
-        if (v >= INT16_MAX) ++clipped_;
+        if (v > peak_) peak_ = v;  // (clipping is counted before the filter)
     }
     const int64_t now = esp_timer_get_time();
     if (now - stats_since_us_ < 10 * 1000000LL) {

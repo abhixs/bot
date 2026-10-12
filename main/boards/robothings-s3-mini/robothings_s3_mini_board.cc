@@ -857,10 +857,13 @@ private:
             app.PlaySound(robo_sounds::Huh());
         }
 
-        // Echo cancellation only while the device itself plays something (reply, alarm,
-        // beep, music): it is the heaviest part of the audio front end, and with nothing
-        // playing it only takes CPU from the wake word and the speech encoder.
-        const bool playing = state == kDeviceStateSpeaking || alarms.IsRinging() ||
+        // Echo cancellation during a conversation (so it is already running, adapted,
+        // when a reply starts - no re-convergence at every reply) and whenever the
+        // device plays something in standby (alarm, beep, music, device speech). Off
+        // only in a silent standby, where it would just take CPU from the wake word.
+        const bool conversation = state == kDeviceStateConnecting ||
+                                  state == kDeviceStateListening;
+        const bool playing = conversation || state == kDeviceStateSpeaking || alarms.IsRinging() ||
                              state == kDeviceStateNotifying ||
                              MusicPlayer::GetInstance().IsPlaying() || tts_running_ ||
                              reminder_phase_ == ReminderPhase::Chime ||

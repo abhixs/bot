@@ -169,6 +169,17 @@ INMP441 may stay on GPIO 4 / 5, move to GPIO 2 / 3, or be joined to both. For a
 cleaner sound: put 470-1000 uF across the MAX98357A VIN / GND, and if it distorts
 when loud, lower its gain (GAIN pin to VIN = 6 dB; default floating = 9 dB).
 
+Audio front end (sdkconfig in `config.json`): the ESP-SR speech-recognition echo
+canceller (`CONFIG_AFE_AEC_SPEECH_RECOGNITION`, linear only - the full-duplex one's
+non-linear suppression also attenuates the user's voice while the device speaks,
+which hid "Alexa"), running during conversations and whenever the device plays
+something, with the speaker samples as its reference; WebRTC noise suppression
+(`CONFIG_AFE_NOISE_SUPPRESSION`); a 100 Hz high-pass on the microphone (air and fan
+rumble); the INMP441 scaled with 6 dB more headroom (`>> 13`) so the speaker's echo
+does not clip, and `CONFIG_AFE_OUTPUT_GAIN_PERCENT=200` giving the speech sent to the
+server its level back. Muting ramps over 5 ms (no click). The serial log reports
+microphone clipping ("Microphone clipped N samples in 10 s").
+
 ## Flashing
 
 Open `index.html` from GitHub Pages (or any https host) in Chrome / Edge, or flash

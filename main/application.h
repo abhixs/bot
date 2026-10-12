@@ -1,6 +1,7 @@
 #ifndef _APPLICATION_H_
 #define _APPLICATION_H_
 
+#include <atomic>
 #include <freertos/FreeRTOS.h>
 #include <freertos/event_groups.h>
 #include <freertos/task.h>
@@ -155,7 +156,9 @@ private:
     std::function<void(const std::string&)> mcp_broadcast_callback_;
 
     bool has_server_time_ = false;
-    bool aborted_ = false;
+    // Set when speaking is aborted (wake word, button), cleared by the next "tts start":
+    // reply audio still arriving from the aborted answer is dropped.
+    std::atomic<bool> aborted_{false};
     bool assets_version_checked_ = false;
     bool play_popup_on_listening_ = false;  // Flag to play popup sound after state changes to listening
     bool wake_sound_on_detect_ = false;     // see SetWakeSoundOnDetect()

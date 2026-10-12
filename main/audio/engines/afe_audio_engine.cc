@@ -141,17 +141,32 @@ bool AfeAudioEngine::Initialize(AudioCodec* codec, int frame_duration_ms,
 
     char* vad_model_name =
         models_ == nullptr ? nullptr : esp_srmodel_filter(models_, ESP_VADN_PREFIX, nullptr);
+#if CONFIG_AFE_AEC_SPEECH_RECOGNITION
+    afe_config_t* afe_config =
+        afe_config_init(input_format.c_str(), models_, AFE_TYPE_SR, AFE_MODE_LOW_COST);
+#else
     afe_config_t* afe_config =
         afe_config_init(input_format.c_str(), models_, AFE_TYPE_FD, AFE_MODE_LOW_COST);
+#endif
     if (afe_config == nullptr) {
         ESP_LOGE(TAG, "Failed to create AFE configuration");
         return false;
     }
 
     afe_config->aec_init = codec_->input_reference();
+#if CONFIG_AFE_AEC_SPEECH_RECOGNITION
+    afe_config->aec_mode = AEC_MODE_SR_LOW_COST;
+    afe_config->aec_filter_length = 4;
+#else
     afe_config->aec_mode = AEC_MODE_FD_LOW_COST;
     afe_config->aec_nlp_level = AEC_NLP_LEVEL_VERYAGGR;
+#endif
+#if CONFIG_AFE_NOISE_SUPPRESSION
+    afe_config->ns_init = true;
+    afe_config->afe_ns_mode = AFE_NS_MODE_WEBRTC;
+#else
     afe_config->ns_init = false;
+#endif
     afe_config->vad_init = kUseAfeForVoiceProcessing;
     afe_config->vad_mode = VAD_MODE_0;
     afe_config->vad_min_noise_ms = 100;
@@ -179,6 +194,9 @@ bool AfeAudioEngine::Initialize(AudioCodec* codec, int frame_duration_ms,
     }
     afe_config->agc_init = false;
     afe_config->memory_alloc_mode = AFE_MEMORY_ALLOC_MORE_PSRAM;
+#ifdef CONFIG_AFE_OUTPUT_GAIN_PERCENT
+    afe_config->afe_linear_gain = CONFIG_AFE_OUTPUT_GAIN_PERCENT / 100.0f;
+#endif
 
     ESP_LOGI(TAG, "Before AFE create: free=%u min=%u largest=%u",
              heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
@@ -188,6 +206,14 @@ bool AfeAudioEngine::Initialize(AudioCodec* codec, int frame_duration_ms,
     if (afe_iface_ != nullptr) {
         afe_data_ = afe_iface_->create_from_config(afe_config);
     }
+#if CONFIG_AFE_NOISE_SUPPRESSION
+    if (afe_iface_ != nullptr && afe_data_ == nullptr) {
+        // Never lose the wake word over the noise suppressor: without it, then.
+        ESP_LOGW(TAG, "AFE with noise suppression failed; creating it without");
+        afe_config->ns_init = false;
+        afe_data_ = afe_iface_->create_from_config(afe_config);
+    }
+#endif
     afe_config_free(afe_config);
 
     if (afe_iface_ == nullptr || afe_data_ == nullptr) {

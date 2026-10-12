@@ -552,7 +552,7 @@ void Application::InitializeProtocol() {
     });
 
     protocol_->OnIncomingAudio([this](std::unique_ptr<AudioStreamPacket> packet) {
-        if (GetDeviceState() == kDeviceStateSpeaking) {
+        if (GetDeviceState() == kDeviceStateSpeaking && !aborted_.load()) {
             audio_service_.PushPacketToDecodeQueue(std::move(packet));
         }
     });

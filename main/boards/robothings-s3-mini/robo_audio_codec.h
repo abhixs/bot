@@ -12,7 +12,15 @@
 //   canceller remove the device's own sound (alarm beep, voice, music) from the
 //   microphone signal while the wake word is being listened for;
 // - a mute switch used to silence a reply at once (e.g. after "bye") without
-//   touching the saved volume;
+//   touching the saved volume, ramped over 5 ms so muting never clicks;
+// - microphone headroom: the INMP441's 24-bit samples are scaled to 16 bits with
+//   6 dB more headroom than the generic driver (>> 13 instead of >> 12), so the
+//   loud echo of the speaker next to it does not clip - a clipped echo is
+//   non-linear and the echo canceller cannot remove it. The AFE output gain
+//   (CONFIG_AFE_OUTPUT_GAIN_PERCENT) gives the speech sent to the server its usual
+//   level back, after the echo is removed;
+// - a gentle 2nd-order high-pass at 100 Hz on the microphone: air flow, fan rumble
+//   and handling noise sit mostly below speech, so they are cut before the AFE;
 // - a microphone clipping counter, logged so a too-loud or badly wired mic shows
 //   up in the serial log.
 #pragma once
@@ -61,6 +69,12 @@ private:
     std::vector<int16_t> resampled_;  // only used by the output task
 
     std::vector<int16_t> mic_;        // only used by the input task
+    std::vector<int32_t> raw_;        // only used by the input task
+    // High-pass biquad state and coefficients (input task only)
+    float hp_b0_ = 1, hp_b1_ = 0, hp_b2_ = 0, hp_a1_ = 0, hp_a2_ = 0;
+    float hp_x1_ = 0, hp_x2_ = 0, hp_y1_ = 0, hp_y2_ = 0;
+    float mute_gain_ = 1.0f;          // output task only: ramps to 0 / 1
+    std::vector<int16_t> ramped_;     // only used by the output task
     // Microphone capture clock (input task only)
     int64_t capture_index_ = 0;   // samples read so far
     int64_t capture_offset_ = 0;  // time (16 kHz samples) minus sample index
@@ -68,6 +82,7 @@ private:
     bool capture_synced_ = false;
     std::vector<int16_t> silence_;    // only used by the output task
     std::atomic<bool> muted_{false};
+    static constexpr int kMicShift = 13;
 
     // Microphone level diagnostics (input task only)
     int64_t stats_since_us_ = 0;
