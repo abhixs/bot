@@ -199,9 +199,9 @@ constexpr NumberWord kNumberWords[] = {
     {"nineteen", 19}, {"twenty", 20}, {"thirty", 30}, {"forty", 40}, {"fifty", 50},
     {"sixty", 60}, {"a", 1}, {"an", 1},
     {"ek", 1}, {"do", 2}, {"teen", 3}, {"char", 4}, {"chaar", 4}, {"paanch", 5}, {"panch", 5},
-    {"chhe", 6}, {"saat", 7}, {"aath", 8}, {"nau", 9}, {"das", 10}, {"dus", 10}, {"barah", 12}, {"baarah", 12},
+    {"chhe", 6}, {"saat", 7}, {"aath", 8}, {"nau", 9}, {"das", 10}, {"barah", 12},
     {"pandrah", 15}, {"bees", 20}, {"pachees", 25}, {"pachis", 25}, {"pachchis", 25},
-    {"tees", 30}, {"chalis", 40}, {"chaalis", 40}, {"pachas", 50}, {"pachaas", 50},
+    {"tees", 30}, {"chalis", 40}, {"pachas", 50},
     {"एक", 1}, {"दो", 2}, {"तीन", 3}, {"चार", 4}, {"पांच", 5}, {"पाँच", 5}, {"छह", 6},
     {"सात", 7}, {"आठ", 8}, {"नौ", 9}, {"दस", 10}, {"पंद्रह", 15}, {"बीस", 20},
     {"पच्चीस", 25}, {"तीस", 30}, {"चालीस", 40}, {"पचास", 50}, {"साठ", 60},
@@ -308,9 +308,7 @@ int DurationOf(const Sentence& s) {
     int total = 0;
     for (size_t i = 0; i < w.size(); ++i) {
         // "half an hour" / "aadha ghanta"
-        if ((w[i] == "half" || w[i] == "aadha" || w[i] == "aadhe" || w[i] == "आधा" ||
-             w[i] == "आधे") &&
-            i + 1 < w.size()) {
+        if ((w[i] == "half" || w[i] == "aadha" || w[i] == "आधा") && i + 1 < w.size()) {
             size_t j = i + 1;
             if (j < w.size() && (w[j] == "an" || w[j] == "a")) ++j;
             if (j < w.size() && UnitSeconds(w[j]) == 3600) {
@@ -404,87 +402,6 @@ VoiceCommand ParseTimers(const Sentence& s) {
     return {};
 }
 
-// Answers to an announced reminder
-constexpr Words kAckCore = {"ok", "okay", "okk", "okey", "okie", "k", "thik", "theek", "thek",
-                            "tik", "done", "thanks", "thank", "thankyou", "sure", "alright",
-                            "fine", "noted", "haan", "han", "haa", "ha", "hmm", "acha", "accha",
-                            "achha", "achchha", "bas", "chup", "band", "bandh", "stop", "yes",
-                            "yeah", "yep", "got", "understood", "shukriya", "dhanyavad",
-                            "dhanyawad", "enough", "quiet", "silent", "ओके", "ठीक", "हाँ", "हां",
-                            "अच्छा", "बस", "चुप", "बंद", "धन्यवाद", "शुक्रिया"};
-constexpr Words kAckFiller = {"hai", "hain", "he", "h", "ji", "jee", "karo", "kar", "kardo",
-                              "do", "it", "please", "pls", "you", "ho", "gaya", "gya", "gayi",
-                              "liya", "li", "le", "raho", "rahiye", "ab", "now", "alexa", "very",
-                              "much", "so", "that", "is", "i", "will", "remember", "samajh",
-                              "samjh", "dost", "na", "मैं", "है", "जी", "करो", "रहो", "हो", "गया",
-                              "ठीक", "अब"};
-constexpr Words kRemindAgainWords = {"remind", "reminder", "yaad", "dilana", "dilao", "dila",
-                                     "dilaana", "dilaiye", "snooze", "again", "phir", "fir",
-                                     "firse", "phirse", "later", "baad", "bad", "after", "aur",
-                                     "more", "याद", "बाद", "फिर"};
-
-// News: "latest news batao", "aaj ki khabar", "cricket ki news", "Gurugram news"
-constexpr Words kNewsWords = {"news", "khabar", "khabare", "khabre", "khabrein", "khabren",
-                              "khabaren", "samachar", "headlines", "headline", "न्यूज़",
-                              "न्यूज", "खबर", "खबरें", "ख़बर", "ख़बरें", "समाचार"};
-constexpr Words kNewsFiller = {
-    "latest", "today", "todays", "aaj", "aj", "ki", "ka", "ke", "kya", "hai", "hain", "batao",
-    "bataiye", "bata", "batado", "sunao", "suna", "sunaiye", "sunado", "do", "dijiye", "please",
-    "me", "mujhe", "hume", "humein", "the", "a", "an", "of", "on", "about", "for", "in", "what",
-    "whats", "is", "are", "tell", "give", "read", "top", "taaza", "taza", "tazaa", "abhi",
-    "current", "recent", "new", "any", "koi", "kuch", "sabse", "nayi", "naya", "nai", "mein",
-    "main", "me", "pe", "par", "se", "google", "internet", "web", "search", "karo", "kar", "ho",
-    "raha", "rahi", "rahe", "show", "get", "hindi", "english", "alexa", "aur", "and", "update",
-    "updates", "breaking", "some", "you", "can", "could", "would", "i", "want", "to", "hear",
-    "know", "jaan", "jaana", "chahta", "chahti", "hoon", "hun", "news", "khabar", "khabare",
-    "khabre", "khabrein", "khabren", "khabaren", "samachar", "headlines", "headline", "wali",
-    "wala", "wale", "related", "regarding", "lates", "letest", "aaj", "din", "day", "tak",
-    "newz", "nyuz", "nyooz", "newspaper", "akhbar", "paper",
-    "आज", "की", "का", "के", "बताओ", "सुनाओ", "न्यूज़", "न्यूज", "खबर", "खबरें", "ख़बर",
-    "ख़बरें", "समाचार", "ताज़ा", "ताजा", "लेटेस्ट", "हिंदी", "में", "क्या", "है"};
-
-VoiceCommand ParseNews(const Sentence& s) {
-    // Speech-to-text spells these many ways ("न्यूज़" with or without the dot, ...).
-    if (!s.Has(kNewsWords) &&
-        !s.Contains({"न्यूज", "न्यूज़", "खबर", "ख़बर", "समाचार", "news", "khabar", "khabr",
-                     "samachar", "headline", "nyuz", "nyooz", "newz"})) {
-        return {};
-    }
-    VoiceCommand command;
-    command.type = VoiceShortcut::News;
-    for (const auto& w : s.words()) {
-        if (w == "hindi" || w == "हिंदी") command.hindi = true;
-        if (static_cast<unsigned char>(w[0]) >= 0xE0) command.hindi = true;  // Devanagari
-        if (In(w, kNewsFiller) || (w.size() == 1 && static_cast<unsigned char>(w[0]) < 0x80)) {
-            continue;  // filler, or e.g. the "s" of "today's"
-        }
-        if (!command.query.empty()) command.query += " ";
-        command.query += w;
-    }
-    return command;
-}
-
-// Reminder requests handled on the device ("remind me to X after N minutes")
-constexpr Words kRemindWords = {"remind", "reminder", "reminders", "yaad", "याद", "रिमाइंड",
-                                "रिमाइंडर"};
-// A clock time or a day: for the AI (self.reminder.create).
-constexpr Words kClockWords = {"baje", "bje", "pm", "am", "oclock", "kal", "tomorrow", "subah",
-                               "shaam", "sham", "raat", "dopahar", "today", "aaj", "at",
-                               "daily", "every", "roz", "rozana", "har", "weekly", "monday",
-                               "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
-                               "बजे", "कल", "सुबह", "शाम", "रात", "रोज़", "रोज"};
-constexpr Words kReminderFiller = {
-    "remind", "reminder", "me", "mujhe", "muje", "mujhko", "to", "that", "about", "please",
-    "alexa", "after", "in", "within", "baad", "bad", "mein", "main", "ko", "ki", "ke", "ka",
-    "karna", "krna", "karnaa", "karo", "kar", "kara", "kardo", "karde", "dena", "de", "do",
-    "dilana", "dilaana", "dila", "dilao", "dilaiye", "dilaye", "yaad", "set", "a", "an", "the",
-    "hai", "hain", "hoon", "hu", "aur", "and", "se", "pe", "ji", "jaroor", "zaroor", "then",
-    "can", "you", "could", "will", "would", "mera", "meri", "mere", "liye", "lagao", "laga",
-    "ok", "okay", "half", "aadha", "more", "for", "of", "i", "need", "want", "have", "has",
-    "it", "tum", "aap", "mujhse", "is", "be", "hoga", "hogi", "chahiye", "wala", "wali",
-    "याद", "दिलाना", "दिला", "दिलाओ", "बाद", "में", "मुझे", "को", "की", "का", "के", "है",
-    "करना", "देना", "आधा", "आधे", "aadhe", "और", "कि", "हैं"};
-
 VoiceShortcut ParseTicking(const Sentence& s) {
     if (!s.Has(kTickWords) && !s.HasPhrase(kTickPhrases)) return VoiceShortcut::None;
     if (s.Has(kTickOffWords)) return VoiceShortcut::TickingOff;
@@ -548,14 +465,9 @@ VoiceCommand ParseVoiceCommand(const std::string& raw) {
         text.replace(pos, 10, "stopwatch");
     }
     const Sentence s(text);
-    if (s.size() > kMaxShortcutWords && s.size() <= 16) {
-        // A longer way to ask for the news ("mujhe google se aaj ki ... news batao").
-        if (auto r = ParseNews(s); r.type != VoiceShortcut::None) return r;
-    }
     if (s.size() == 0 || s.size() > kMaxShortcutWords) return {};
     if (auto r = ParseStandby(s); r != VoiceShortcut::None) return {r};
     if (auto r = ParseTicking(s); r != VoiceShortcut::None) return {r};
-    if (auto r = ParseNews(s); r.type != VoiceShortcut::None) return r;
     if (auto r = ParseTheme(s); r != VoiceShortcut::None) return {r};
     if (auto r = ParseExpression(s); r.type != VoiceShortcut::None) return r;
     if (s.Has(kStopwatchWords)) return ParseStopwatch(s);
@@ -566,58 +478,10 @@ VoiceCommand ParseVoiceCommand(const std::string& raw) {
 
 VoiceShortcut ParseVoiceShortcut(const std::string& raw) { return ParseVoiceCommand(raw).type; }
 
-bool ParseReminderRequest(const std::string& raw, int& seconds, std::string& message) {
-    seconds = 0;
-    message.clear();
-    const Sentence s(NormalizeSpeech(raw));
-    if (s.size() < 3 || s.size() > 16 || !s.Has(kRemindWords) || s.Has(kClockWords)) {
-        return false;
-    }
-    const int duration = DurationOf(s);
-    if (duration < 5 || duration > 7 * 24 * 3600) return false;
-    for (const auto& w : s.words()) {
-        if (NumberValue(w) >= 0 || UnitSeconds(w) > 0 || In(w, kReminderFiller)) continue;
-        // "10min", "30sec"
-        size_t k = 0;
-        while (k < w.size() && isdigit(static_cast<unsigned char>(w[k]))) ++k;
-        if (k > 0 && (k == w.size() || UnitSeconds(w.substr(k)) > 0)) continue;
-        if (!message.empty()) message += " ";
-        message += w;
-    }
-    if (message.size() < 3) {
-        message.clear();
-        return false;  // no message: the AI asks what it is for
-    }
-    seconds = duration;
-    return true;
-}
-
-ReminderReply ParseReminderReply(const std::string& raw, int& seconds) {
-    seconds = 0;
-    const Sentence s(NormalizeSpeech(raw));
-    if (s.size() == 0 || s.size() > kMaxShortcutWords) return ReminderReply::None;
-    // "remind me after 10 minutes", "10 minute baad yaad dilana", "snooze 5 minutes"
-    const int duration = DurationOf(s);
-    if (duration > 0 && duration <= 24 * 3600 && s.Has(kRemindAgainWords)) {
-        seconds = duration;
-        return ReminderReply::Snooze;
-    }
-    // "okay", "thik hai", "chup raho", "band karo", "got it, thanks"
-    if (s.size() <= 6 && s.Has(kAckCore) && s.OnlyFrom(kAckCore, kAckFiller)) {
-        return ReminderReply::Acknowledge;
-    }
-    if (s.size() <= 6 && (s.Has(kQuietWords) || s.HasPhrase(kQuietPhrases))) {
-        return ReminderReply::Acknowledge;  // "shut up", "stop talking"
-    }
-    return ReminderReply::None;
-}
-
 const char* VoiceShortcutName(VoiceShortcut shortcut) {
     switch (shortcut) {
         case VoiceShortcut::Standby:
             return "standby";
-        case VoiceShortcut::News:
-            return "news";
         case VoiceShortcut::TickingOn:
             return "ticking on";
         case VoiceShortcut::TickingOff:

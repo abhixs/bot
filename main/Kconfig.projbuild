@@ -976,47 +976,6 @@ config USE_AUDIO_PROCESSOR
         is not enabled because this project does not provide an NSNet model.
         Requires ESP32-S3, ESP32-P4, or ESP32-S31 with PSRAM.
 
-choice AFE_AEC_TYPE
-    prompt "AFE echo canceller type"
-    default AFE_AEC_FULL_DUPLEX
-    depends on USE_AUDIO_PROCESSOR
-    help
-        Which ESP-SR echo canceller the shared AFE uses when a playback reference is
-        available.
-
-config AFE_AEC_FULL_DUPLEX
-    bool "Full duplex (linear filter + non-linear suppression)"
-    help
-        AFE_TYPE_FD / AEC_MODE_FD_LOW_COST with the very aggressive NLP level.
-
-config AFE_AEC_SPEECH_RECOGNITION
-    bool "Speech recognition (linear filter only)"
-    help
-        AFE_TYPE_SR / AEC_MODE_SR_LOW_COST: the echo canceller ESP-SR provides for
-        voice wake-up. No non-linear suppression, which also attenuates the user's
-        own voice while the device plays (double talk), so the wake word stays
-        detectable over the device's playback; about a third of the CPU of the
-        full-duplex mode. Suits boards whose uplink is not used while they speak.
-endchoice
-
-config AFE_NOISE_SUPPRESSION
-    bool "Enable AFE noise suppression (WebRTC)"
-    default n
-    depends on USE_AUDIO_PROCESSOR
-    help
-        Turn on the AFE's single-channel noise suppression for stationary noise
-        (air flow, fan, hiss). Uses the WebRTC suppressor built into ESP-SR, no model
-        needed. If the AFE cannot be created with it, it is turned off again.
-
-config AFE_OUTPUT_GAIN_PERCENT
-    int "AFE output gain (percent)"
-    default 100
-    range 50 400
-    depends on USE_AUDIO_PROCESSOR
-    help
-        Linear gain on the AFE output sent to the server (afe_linear_gain), e.g. to
-        give back level a board removed from its microphone input for headroom.
-
 config USE_DEVICE_AEC
     bool "Enable Device-Side AEC"
     default n

@@ -552,7 +552,7 @@ void Application::InitializeProtocol() {
     });
 
     protocol_->OnIncomingAudio([this](std::unique_ptr<AudioStreamPacket> packet) {
-        if (GetDeviceState() == kDeviceStateSpeaking && !aborted_.load()) {
+        if (GetDeviceState() == kDeviceStateSpeaking) {
             audio_service_.PushPacketToDecodeQueue(std::move(packet));
         }
     });
@@ -1314,49 +1314,6 @@ void Application::WakeWordInvoke(const std::string& wake_word) {
             }
         });
     }
-}
-
-void Application::InvokeWithText(const std::string& text) {
-    // The text goes into a JSON string as is (Protocol::SendWakeWordDetected).
-    std::string escaped;
-    for (unsigned char c : text) {
-        if (c == '"' || c == '\\') {
-            escaped.push_back('\\');
-            escaped.push_back(static_cast<char>(c));
-        } else if (c < 0x20) {
-            escaped.push_back(' ');
-        } else {
-            escaped.push_back(static_cast<char>(c));
-        }
-    }
-    Schedule([this, escaped]() {
-        if (!protocol_ || GetDeviceState() != kDeviceStateIdle) {
-            return;
-        }
-        if (!SetDeviceState(kDeviceStateConnecting)) {
-            return;
-        }
-        // Let the state change be processed first (UI update), then open the
-        // channel, which may block for about a second.
-        Schedule([this, escaped]() { ContinueTextInvoke(escaped); });
-    });
-}
-
-void Application::ContinueTextInvoke(const std::string& text) {
-    if (GetDeviceState() != kDeviceStateConnecting) {
-        return;
-    }
-    Board::GetInstance().SetPowerSaveLevel(PowerSaveLevel::PERFORMANCE);
-    if (!protocol_->IsAudioChannelOpened() && !protocol_->OpenAudioChannel()) {
-        SetDeviceState(kDeviceStateIdle);
-        return;
-    }
-    ESP_LOGI(TAG, "Text invoke: %s", text.c_str());
-    if (!text.empty()) {
-        protocol_->SendWakeWordDetected(text);
-    }
-    play_popup_on_listening_ = false;
-    SetListeningMode(GetDefaultListeningMode());
 }
 
 bool Application::CanEnterSleepMode() {

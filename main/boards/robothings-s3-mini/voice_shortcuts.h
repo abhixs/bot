@@ -38,7 +38,6 @@ enum class VoiceShortcut {
     DarkTheme,      // "dark mode", "turn off light mode", "screen dark karo"
     TickingOn,      // "ticking sound on karo", "turn on the ticking"
     TickingOff,     // "turn off the ticking sound", "ticking sound off karo"
-    News,           // "latest news batao", "cricket ki news", "hindi mein khabar sunao"
 };
 
 // Lower-case ASCII, punctuation (also the Devanagari danda) turned into spaces,
@@ -49,8 +48,6 @@ struct VoiceCommand {
     VoiceShortcut type = VoiceShortcut::None;
     int seconds = 0;  // duration for TimerSet / Extend / PomodoroStart (0 = none given)
     const char* expression = nullptr;  // ShowExpression: e.g. "crying"
-    std::string query;                 // News: topic ("" = top stories)
-    bool hindi = false;                // News: Hindi headlines
 };
 
 VoiceCommand ParseVoiceCommand(const std::string& text);
@@ -61,17 +58,3 @@ VoiceShortcut ParseVoiceShortcut(const std::string& text);  // ParseVoiceCommand
 int ParseDuration(const std::string& normalized_text);
 
 const char* VoiceShortcutName(VoiceShortcut shortcut);
-
-// The user's answer right after a reminder was announced.
-enum class ReminderReply {
-    None,         // anything else: the AI answers (e.g. asks to repeat)
-    Acknowledge,  // "okay", "thik hai", "chup raho", "band karo", "got it", "thanks"
-    Snooze,       // "remind me after 10 minutes", "5 minute baad yaad dilana" (seconds)
-};
-ReminderReply ParseReminderReply(const std::string& text, int& seconds);
-
-// "remind me to drink water after 30 minutes", "30 sec me yaad dilana ki pani pina
-// hai": a reminder in a while from now, with its message ("drink water", "pani
-// pina"). False for anything else (a clock time such as "6 baje", no message, ...),
-// which is left to the AI.
-bool ParseReminderRequest(const std::string& text, int& seconds, std::string& message);

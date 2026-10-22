@@ -1,7 +1,6 @@
 #ifndef _APPLICATION_H_
 #define _APPLICATION_H_
 
-#include <atomic>
 #include <freertos/FreeRTOS.h>
 #include <freertos/event_groups.h>
 #include <freertos/task.h>
@@ -111,11 +110,6 @@ public:
 
     void Reboot();
     void WakeWordInvoke(const std::string& wake_word);
-    // Opens a conversation from standby without a wake word (listening starts), e.g.
-    // after a device-triggered announcement. A non-empty `text` is also sent to the
-    // server as the detected wake phrase (what CONFIG_SEND_WAKE_WORD_DATA sends);
-    // whether the server answers it depends on the server. Ignored unless idle.
-    void InvokeWithText(const std::string& text);
     // Play the wake sound (popup) the moment the wake word is detected, before the
     // audio channel is opened, instead of when listening starts. Off by default.
     void SetWakeSoundOnDetect(bool enable) { wake_sound_on_detect_ = enable; }
@@ -156,9 +150,7 @@ private:
     std::function<void(const std::string&)> mcp_broadcast_callback_;
 
     bool has_server_time_ = false;
-    // Set when speaking is aborted (wake word, button), cleared by the next "tts start":
-    // reply audio still arriving from the aborted answer is dropped.
-    std::atomic<bool> aborted_{false};
+    bool aborted_ = false;
     bool assets_version_checked_ = false;
     bool play_popup_on_listening_ = false;  // Flag to play popup sound after state changes to listening
     bool wake_sound_on_detect_ = false;     // see SetWakeSoundOnDetect()
@@ -180,7 +172,6 @@ private:
     void ContinueOpenAudioChannel(ListeningMode mode);
     void BeginWakeWordInvoke(const std::string& wake_word);
     void ContinueWakeWordInvoke(const std::string& wake_word);
-    void ContinueTextInvoke(const std::string& text);
     void StartListeningAudio();
     void ConfigureWakeWordForListening();
     void StartNotification(std::string audio_url, std::vector<NotifySubtitle> subtitles);
