@@ -22,7 +22,9 @@ enum class VoiceShortcut {
     TimerMode,      // "show timer", "show countdown", "timer dikhao"
     TimerSet,       // "set a timer for 10 minutes", "10 minute ka timer lagao" (seconds)
     Extend,         // "extend 10 minutes", "10 minute aur" (seconds, default 10 min)
-    StopAlarm,      // "stop", "alarm band karo" (ringing alarm / Pomodoro decision)
+    StopAlarm,      // "alarm band karo", "stop the alarm" (the ringing alarm)
+    StopAll,        // "stop", "band karo", "bas", "sab band karo", "stop everything":
+                    // everything running, timers / Pomodoro / alarms within the hour
     StopTimer,      // "stop the timer": the stopwatch, else a ringing alarm
     PomodoroStart,  // "set pomodoro timer", "pomodoro start karo" (seconds = focus, optional)
     PomodoroStop,   // "stop pomodoro", "pomodoro band karo"

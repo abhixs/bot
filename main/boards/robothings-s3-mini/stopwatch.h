@@ -17,6 +17,7 @@ public:
 
     // Starts from 00:00 (also when it was already running).
     void Start() {
+        last_start_us_.store(esp_timer_get_time());
         accumulated_us_.store(0);
         started_us_.store(esp_timer_get_time());
         running_.store(true);
@@ -44,6 +45,11 @@ public:
     }
 
     bool active() const { return active_.load(); }
+    // Started (from 00:00) less than `us` ago.
+    bool StartedWithin(int64_t us) const {
+        const int64_t t = last_start_us_.load();
+        return t != 0 && esp_timer_get_time() - t < us;
+    }
     bool running() const { return running_.load(); }
     // Elapsed whole seconds, or -1 when no stopwatch is on.
     int ElapsedSeconds() const {
@@ -59,4 +65,5 @@ private:
     std::atomic<bool> running_{false};
     std::atomic<int64_t> started_us_{0};
     std::atomic<int64_t> accumulated_us_{0};
+    std::atomic<int64_t> last_start_us_{0};
 };

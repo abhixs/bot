@@ -32,6 +32,7 @@ enum class DisplayScreen {
     Stopwatch,   // the stopwatch, when chosen
     Alarm,       // an alarm or timer is ringing
     Expression,  // an expression the user asked for ("roo ke dikhao"), for a few seconds
+    Volume,      // the new volume ("80" | "%") for a second after it changed
     Setup,       // starting, Wi-Fi setup, activation, upgrade, errors
 };
 
@@ -78,6 +79,9 @@ public:
     bool ShowStopwatch();
     // Back to the main mode if the countdown was on screen (e.g. Pomodoro ended).
     void ClearCountdown();
+    // Shows the volume in the dot font ("80" in the left eye, "%" in the right) for one
+    // second, then the previous screen again.
+    void ShowVolume(int percent);
     void SetDisplayTheme(DisplayTheme theme);
     DisplayTheme display_theme() const { return theme_; }
     // What is on the screen right now (safe from any task).
@@ -146,6 +150,13 @@ private:
     void ApplyThemeLocked();
 
     bool countdown_selected_ = false;
+    // Fewer eye frames while the speaker plays (see Animate).
+    static constexpr int kPlaybackFrameDivider = 3;
+    int skipped_frames_ = 0;
+    uint32_t skipped_ms_ = 0;
+    int volume_shown_ = 0;
+    uint32_t volume_until_ms_ = 0;
+    bool volume_active_ = false;
     bool stopwatch_selected_ = false;
     std::function<int()> stopwatch_;
     std::function<bool()> stopwatch_running_;

@@ -116,6 +116,18 @@ void McpServer::AddCommonTools() {
     }
 #endif
 
+    // A board tool with the same name as a common one replaces it (the board added it
+    // first, e.g. its own "self.audio_speaker.set_volume").
+    tools_.erase(std::remove_if(tools_.begin(), tools_.end(),
+                                [&original_tools](const auto& common) {
+                                    return std::any_of(original_tools.begin(), original_tools.end(),
+                                                       [&common](const auto& board_tool) {
+                                                           return board_tool->name() ==
+                                                                  common->name();
+                                                       });
+                                }),
+                 tools_.end());
+
     // Restore the original tools list to the end of the tools list
     tools_.insert(tools_.end(), std::make_move_iterator(original_tools.begin()),
                   std::make_move_iterator(original_tools.end()));

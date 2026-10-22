@@ -10,6 +10,7 @@
 #include "led/single_led.h"
 #include "mcp_server.h"
 #include "music_player.h"
+#include "number_words.h"
 #include "pomodoro.h"
 #include "popdown_sound.h"
 #include "robo_sounds.h"
@@ -452,6 +453,20 @@ private:
                 }
                 if (alarms.CancelPendingRing()) return true;  // between the alarm's rings
                 return ring_just_stopped;  // "Alexa" already silenced it: just "stop"
+            case VoiceShortcut::StopAll: {
+                // "Alexa, stop": everything that runs stops; timers, the Pomodoro and
+                // alarms due within the hour are cancelled, later alarms are kept. The
+                // screen goes back to its main mode (time / emotion) by itself.
+                if (alarms.IsRinging()) alarms.StopRinging();
+                alarms.CancelPendingRing();
+                alarms.CancelTimersAndAlarmsWithin(60 * 60);
+                if (pomodoro.active()) pomodoro.Stop();
+                stopwatch.Stop();
+                MusicPlayer::GetInstance().Stop();
+                pomodoro_view_ = false;
+                if (eyes_display_ != nullptr) eyes_display_->ClearCountdown();
+                return true;
+            }
             case VoiceShortcut::StopTimer:
                 if (stopwatch.Stop()) return true;
                 if (alarms.IsRinging()) {
@@ -732,11 +747,11 @@ private:
             auto volume = codec->output_volume() + 10;
             if (volume > 100) volume = 100;
             codec->SetOutputVolume(volume);
-            GetDisplay()->ShowNotification(Lang::Strings::VOLUME + std::to_string(volume));
+            if (eyes_display_ != nullptr) eyes_display_->ShowVolume(volume);
         });
         volume_up_button_.OnLongPress([this]() {
             GetAudioCodec()->SetOutputVolume(100);
-            GetDisplay()->ShowNotification(Lang::Strings::MAX_VOLUME);
+            if (eyes_display_ != nullptr) eyes_display_->ShowVolume(100);
         });
 
         volume_down_button_.OnClick([this]() {
@@ -745,11 +760,11 @@ private:
             auto volume = codec->output_volume() - 10;
             if (volume < 0) volume = 0;
             codec->SetOutputVolume(volume);
-            GetDisplay()->ShowNotification(Lang::Strings::VOLUME + std::to_string(volume));
+            if (eyes_display_ != nullptr) eyes_display_->ShowVolume(volume);
         });
         volume_down_button_.OnLongPress([this]() {
             GetAudioCodec()->SetOutputVolume(0);
-            GetDisplay()->ShowNotification(Lang::Strings::MUTED);
+            if (eyes_display_ != nullptr) eyes_display_->ShowVolume(0);
         });
     }
 
@@ -933,7 +948,7 @@ private:
                     pomodoro.Start(minutes * 60);  // (already started by the voice shortcut)
                 }
                 if (!pomodoro.active()) return std::unexpected(std::string("Could not start."));
-                return "{\"success\":true,\"say\":\"" + std::to_string(minutes) +
+                return "{\"success\":true,\"say\":\"" + NumberToEnglishWords(minutes) +
                        " minutes ka timer set ho gaya hai.\"}";
             });
         mcp.AddTool(
@@ -1009,13 +1024,39 @@ private:
                 cJSON_AddBoolToObject(result, "running", stopwatch.running());
                 return result;
             });
+        // Replaces the common volume tool (same name): shows the new volume on the eyes
+        // and gives the short spoken confirmation.
+        mcp.AddTool(
+            "self.audio_speaker.set_volume",
+            "Set the speaker volume (0-100). For 'volume badhao / kam karo' without a number, "
+            "get the current volume from self.get_device_status and change it by 10. Then "
+            "reply with EXACTLY the 'say' text of the result and nothing else.",
+            PropertyList({Property("volume", kPropertyTypeInteger, 0, 100)}),
+            [this](const PropertyList& properties) -> ToolResult {
+                NoteDeviceAction();
+                auto codec = GetAudioCodec();
+                const int before = codec->output_volume();
+                const int volume = properties["volume"].value<int>();
+                codec->SetOutputVolume(volume);
+                if (eyes_display_ != nullptr) eyes_display_->ShowVolume(volume);
+                std::string say = "Volume unchanged.";
+                if (volume > before) {
+                    say = "Increased to " + NumberToEnglishWords(volume) + " percent.";
+                } else if (volume < before) {
+                    say = "Decreased to " + NumberToEnglishWords(volume) + " percent.";
+                }
+                return "{\"success\":true,\"say\":\"" + say + "\"}";
+            });
         mcp.AddTool(
             "self.assistant.standby",
             "End the conversation immediately and go to standby WITHOUT saying anything. Call it "
             "(and do not reply at all) when the user says bye, bye bye, goodbye, chup raho, chup "
             "ho jao, so jao, stop talking or similar. Device style rule: keep replies short; if "
             "you did not understand the user, answer only 'Sorry, samajh nahi paayi. Fir se bolein.' "
-            "and nothing else.",
+            "and nothing else. Numbers rule: always say every number in English words, also "
+            "in Hindi sentences, never in Hindi and never digit by digit - prices, dates, "
+            "amounts, times, anything: 'six hundred fifty', 'three thousand six hundred fifty', "
+            "'forty-two thousand five hundred sixteen', 'one million four thousand five hundred'.",
             PropertyList(), [this](const PropertyList&) -> ToolResult {
                 Application::GetInstance().Schedule([this]() { GoStandby(); });
                 return true;

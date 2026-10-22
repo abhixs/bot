@@ -6,6 +6,7 @@
 #include "application.h"
 #include "mcp_server.h"
 #include "settings.h"
+#include "stopwatch.h"
 
 #include <cJSON.h>
 #include <esp_log.h>
@@ -257,10 +258,11 @@ void AlarmManager::RegisterTools() {
 
     mcp.AddTool(
         "self.alarm.set_timer",
-        "Start a countdown timer on the device, e.g. 'set a 10 minute timer', 'remind me in "
-        "30 seconds'. (For a Pomodoro use self.pomodoro.start; for counting up use "
-        "self.stopwatch.control.) Give the duration as minutes and/or seconds. A timer under "
-        "31 minutes shows its countdown on the screen at once.",
+        "Start a countdown timer on the device, only when a duration is given, e.g. 'set a 10 "
+        "minute timer'. 'Start timer' / 'start stopwatch' with no duration is the stopwatch "
+        "(self.stopwatch.control), never this. (Pomodoro: self.pomodoro.start.) Give the "
+        "duration as minutes and/or seconds. A timer under 31 minutes shows its countdown on "
+        "the screen at once.",
         PropertyList({
             Property("minutes", kPropertyTypeInteger, 0, 0, 1440),
             Property("seconds", kPropertyTypeInteger, 0, 0, 3600),
@@ -272,6 +274,12 @@ void AlarmManager::RegisterTools() {
             if (!alarm_schedule::IsTimeValid(now)) {
                 return std::unexpected(
                     std::string("Device clock is not synced yet; try again in a moment."));
+            }
+            if (Stopwatch::GetInstance().StartedWithin(15 * 1000000LL)) {
+                // "Start timer" was just started as the stopwatch on the device.
+                return std::string(
+                    "{\"success\":true,\"note\":\"The stopwatch was started. Do not set a "
+                    "countdown; just confirm in a few words.\"}");
             }
             int total = properties["minutes"].value<int>() * 60 + properties["seconds"].value<int>();
             if (total < 5) {
@@ -628,6 +636,35 @@ int AlarmManager::TimerRemaining(int id) {
         }
     }
     return -1;
+}
+
+int AlarmManager::CancelTimersAndAlarmsWithin(int seconds) {
+    const time_t now = time(nullptr);
+    std::lock_guard<std::mutex> lock(mutex_);
+    int cancelled = 0;
+    for (auto it = alarms_.begin(); it != alarms_.end();) {
+        const bool soon = alarm_schedule::IsTimeValid(now) &&
+                          it->fire_at - static_cast<int64_t>(now) <= seconds;
+        if (it->is_timer) {
+            it = alarms_.erase(it);  // every timer (also Pomodoro / snooze timers)
+            ++cancelled;
+        } else if (soon && it->days != 0) {
+            // Repeating: only this ring is skipped.
+            it->fire_at = alarm_schedule::NextOccurrence(static_cast<time_t>(it->fire_at), it->hour,
+                                                         it->minute, it->days);
+            ++cancelled;
+            ++it;
+        } else if (soon) {
+            it = alarms_.erase(it);
+            ++cancelled;
+        } else {
+            ++it;  // more than an hour away: kept
+        }
+    }
+    retry_timer_id_ = 0;
+    if (cancelled > 0) SaveLocked();
+    ESP_LOGI(TAG, "Stop: %d timer(s) / alarm(s) within %d s cancelled", cancelled, seconds);
+    return cancelled;
 }
 
 bool AlarmManager::CancelPendingRing() {

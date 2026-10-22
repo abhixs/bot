@@ -83,6 +83,10 @@ public:
     bool ExtendTimer(int id, int seconds);
     // Drops the snooze of an unanswered alarm. Returns true if there was one.
     bool CancelPendingRing();
+    // "Alexa, stop": cancels every timer and every alarm due within `seconds` (a
+    // repeating one skips that ring and keeps its later days); alarms further away
+    // are kept. Returns how many were cancelled.
+    int CancelTimersAndAlarmsWithin(int seconds);
     // Seconds left on a timer, or -1 when there is no such timer.
     int TimerRemaining(int id);
 

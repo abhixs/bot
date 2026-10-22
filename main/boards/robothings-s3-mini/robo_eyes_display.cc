@@ -274,6 +274,13 @@ bool RoboEyesDisplay::ShowCountdown() {
     return true;
 }
 
+void RoboEyesDisplay::ShowVolume(int percent) {
+    DisplayLockGuard lock(this);
+    volume_shown_ = std::clamp(percent, 0, 100);
+    volume_until_ms_ = lv_tick_get() + 1000;
+    volume_active_ = true;
+}
+
 void RoboEyesDisplay::ClearCountdown() {
     DisplayLockGuard lock(this);
     countdown_selected_ = false;
@@ -327,6 +334,7 @@ void RoboEyesDisplay::SetDisplayTheme(DisplayTheme theme) {
 DisplayScreen RoboEyesDisplay::ResolveScreen(DeviceState state, int countdown_s,
                                              int stopwatch_s) const {
     if (IsSetupState(state)) return DisplayScreen::Setup;
+    if (volume_active_) return DisplayScreen::Volume;
     if (alarm_active_) return DisplayScreen::Alarm;
     if (hold_active_) return DisplayScreen::Expression;
     if (countdown_selected_ && countdown_s >= 0) return DisplayScreen::Countdown;
@@ -343,7 +351,7 @@ void RoboEyesDisplay::ShowScreen(DisplayScreen screen) {
     }
     auto is_dots = [](DisplayScreen s) {
         return s == DisplayScreen::Clock || s == DisplayScreen::Countdown ||
-               s == DisplayScreen::Stopwatch;
+               s == DisplayScreen::Stopwatch || s == DisplayScreen::Volume;
     };
     const bool dots = is_dots(screen);
     const bool had_dots = is_dots(screen_);
@@ -388,8 +396,15 @@ void RoboEyesDisplay::Animate(uint32_t elapsed_ms) {
     if (stopwatch_s < 0) {
         stopwatch_selected_ = false;  // stopwatch ended: back to the main mode
     }
+    if (volume_active_ && static_cast<int32_t>(volume_until_ms_ - now) <= 0) {
+        volume_active_ = false;  // the second is over: back to the previous screen
+    }
     const DisplayScreen screen = ResolveScreen(state, countdown_s, stopwatch_s);
     ShowScreen(screen);
+    if (screen == DisplayScreen::Volume) {
+        if (dot_clock_ != nullptr) dot_clock_->Set(std::to_string(volume_shown_), "%", false);
+        return;
+    }
 
     // No text on the screen, ever: the status strip stays hidden (only the clock and
     // countdown digits are shown).
@@ -449,6 +464,17 @@ void RoboEyesDisplay::Animate(uint32_t elapsed_ms) {
             break;
     }
     eyes_->SetActivity(activity);
+    // While the speaker plays (a reply, music) the eyes are redrawn at about 8 fps
+    // instead of 25: every frame is a full-screen software render plus ~23 ms of
+    // I2C, and at 25 fps that work competed with the audio tasks (the voice broke
+    // up in the emotion mode, not in the clock mode, which redraws once a second).
+    if (state == kDeviceStateSpeaking || music_showing) {
+        skipped_ms_ += elapsed_ms;
+        if (++skipped_frames_ < kPlaybackFrameDivider) return;
+        elapsed_ms = skipped_ms_;
+    }
+    skipped_frames_ = 0;
+    skipped_ms_ = 0;
     eyes_->Tick(elapsed_ms);
 }
 

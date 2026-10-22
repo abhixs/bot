@@ -170,10 +170,10 @@ VoiceShortcut ParseTheme(const Sentence& s) {
 // ---------------------------------------------------------------- timers
 constexpr Words kSetWords = {"set", "start", "laga", "lagao", "lagado", "lagaao", "chalu", "shuru",
                              "begin", "chalao", "लगाओ", "लगा", "शुरू", "चालू", "स्टार्ट"};
-constexpr Words kStopWords = {"stop", "end", "band", "khatam", "finish", "cancel", "off", "ruko",
+constexpr Words kStopWords = {"stop", "end", "band", "khatam", "finish", "cancel", "off", "ruko", "ruk",
                               "dismiss", "enough", "bas", "बंद", "स्टॉप", "रुको", "बस", "खत्म"};
 // "stop" may come with these words and still mean "stop the ringing alarm".
-constexpr Words kStopFiller = {"it", "the", "alarm", "karo", "kar", "do", "ok", "okay", "please",
+constexpr Words kStopFiller = {"it", "the", "alarm", "karo", "kar", "do", "ok", "okay", "please", "jao", "jaao",
                                "now", "ab", "turn", "that", "this", "ringing", "sound", "beep",
                                "करो", "कर", "दो", "अलार्म", "अब", "ओके"};
 constexpr Words kPauseWords = {"pause", "hold", "roko", "rok", "रोको", "पॉज़", "पॉज"};
@@ -184,6 +184,9 @@ constexpr Words kExtendWords = {"extend", "extension", "more", "aur", "badhao", 
                                 "add", "snooze", "बढ़ाओ", "बढ़ा", "और", "एक्सटेंड"};
 constexpr Words kPomodoroWords = {"pomodoro", "pomodoros", "पोमोडोरो"};
 constexpr Words kStopwatchWords = {"stopwatch", "स्टॉपवॉच"};
+constexpr Words kAlarmOnlyWords = {"alarm", "ringing", "sound", "beep", "अलार्म"};
+constexpr Words kAllWords = {"sab", "sabhi", "saara", "sara", "saare", "sare", "all",
+                             "everything", "kuch", "kuchh", "सब", "सभी", "सारा", "सारे"};
 constexpr Words kCountdownTimerWords = {"timer", "countdown", "टाइमर", "काउंटडाउन"};
 constexpr Words kNotTimerWords = {"alarm", "alarms", "remind", "reminder", "yaad", "baje",
                                   "अलार्म", "बजे", "याद"};
@@ -389,9 +392,18 @@ VoiceCommand ParseTimers(const Sentence& s) {
         if (s.Has(kPauseWords)) return {VoiceShortcut::StopwatchPause};
         if (s.Has(kResumeWords)) return {VoiceShortcut::StopwatchResume};
     }
-    // "stop", "stop it", "alarm band karo", "bas"
-    if (s.size() <= 5 && s.Has(kStopWords) && s.OnlyFrom(kStopWords, kStopFiller)) {
-        return {VoiceShortcut::StopAlarm};
+    // "alarm band karo", "stop the alarm": the ringing alarm only. "stop", "stop it",
+    // "band karo", "bas", "sab band karo", "stop everything": everything.
+    if (s.size() <= 5 && s.Has(kStopWords)) {
+        bool only_stop_words = true;
+        for (const auto& w : s.words()) {
+            if (!In(w, kStopWords) && !In(w, kStopFiller) && !In(w, kAllWords)) {
+                only_stop_words = false;
+            }
+        }
+        if (only_stop_words) {
+            return {s.Has(kAlarmOnlyWords) ? VoiceShortcut::StopAlarm : VoiceShortcut::StopAll};
+        }
     }
     if (s.size() <= 2 && s.OnlyFrom(kPauseWords, {"it", "please"})) {
         return {VoiceShortcut::StopwatchPause};
@@ -502,6 +514,8 @@ const char* VoiceShortcutName(VoiceShortcut shortcut) {
             return "extend";
         case VoiceShortcut::StopAlarm:
             return "stop alarm";
+        case VoiceShortcut::StopAll:
+            return "stop all";
         case VoiceShortcut::StopTimer:
             return "stop timer";
         case VoiceShortcut::PomodoroStart:

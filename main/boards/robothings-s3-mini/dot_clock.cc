@@ -1,5 +1,7 @@
 #include "dot_clock.h"
 
+#include <algorithm>
+
 namespace {
 
 constexpr int32_t kPitch = 4;  // distance between dot centres
@@ -25,8 +27,10 @@ const uint8_t* GlyphRows(char c) {
         {0x0E, 0x11, 0x11, 0x0F, 0x01, 0x02, 0x0C},  // 9
     };
     static const uint8_t kDash[kRows] = {0x00, 0x00, 0x00, 0x1F, 0x00, 0x00, 0x00};
+    static const uint8_t kPercent[kRows] = {0x18, 0x19, 0x02, 0x04, 0x08, 0x13, 0x03};
     if (c >= '0' && c <= '9') return kDigits[c - '0'];
     if (c == '-') return kDash;
+    if (c == '%') return kPercent;
     return nullptr;  // space
 }
 
@@ -85,14 +89,16 @@ void DotClock::DrawChar(lv_layer_t* layer, int32_t x, int32_t y, char c) {
 }
 
 void DotClock::DrawGroup(lv_layer_t* layer, int32_t cx, int32_t cy, const std::string& text) {
-    const int32_t n = static_cast<int32_t>(text.size() > 2 ? 2 : text.size());
+    const int32_t n = static_cast<int32_t>(text.size() > 3 ? 3 : text.size());
     if (n == 0) return;
-    const int32_t total = n * kCharW + (n - 1) * kCharGap;
-    int32_t x = cx - total / 2;
+    const int32_t gap = n == 3 ? 2 : kCharGap;  // three characters still fit an eye
+    const int32_t total = n * kCharW + (n - 1) * gap;
+    // Centred on the eye, but never off the screen ("100" is wider than an eye).
+    int32_t x = std::max(origin_x_, std::min(cx - total / 2, origin_x_ + width_ - total));
     const int32_t y = cy - kCharH / 2;
     for (int32_t i = 0; i < n; i++) {
         DrawChar(layer, x, y, text[i]);
-        x += kCharW + kCharGap;
+        x += kCharW + gap;
     }
 }
 
@@ -100,6 +106,7 @@ void DotClock::Draw(lv_layer_t* layer) {
     lv_area_t coords;
     lv_obj_get_coords(obj_, &coords);
     const int32_t cy = coords.y1 + height_ / 2;
+    origin_x_ = coords.x1;
     DrawGroup(layer, coords.x1 + left_cx_, cy, left_);
     DrawGroup(layer, coords.x1 + right_cx_, cy, right_);
     if (colon_) {
