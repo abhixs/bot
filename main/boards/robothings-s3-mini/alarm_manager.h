@@ -7,6 +7,7 @@
 
 #include <esp_timer.h>
 
+#include <atomic>
 #include <cstdint>
 #include <ctime>
 #include <functional>
@@ -64,6 +65,14 @@ public:
     }
     // Called on the main task when a timer is started by voice, with its length.
     void OnTimerSet(std::function<void(int seconds)> cb) { on_timer_set_ = std::move(cb); }
+    // Called on the main task when the AI asks for a countdown but the user named no
+    // duration ("start the timer"): the board starts the stopwatch instead.
+    void OnStopwatchInstead(std::function<void()> cb) { on_stopwatch_instead_ = std::move(cb); }
+    // What the user just said (speech-to-text): did it name a duration?
+    void NoteUserSpeech(bool mentions_duration) {
+        last_speech_us_ = esp_timer_get_time();
+        last_speech_has_duration_ = mentions_duration;
+    }
 
     bool IsRinging() const { return ringing_; }
     // Seconds until the soonest running timer ends (for the on-screen countdown),
@@ -127,6 +136,9 @@ private:
     RingInfo current_ring_;
     std::function<void(const RingInfo&)> on_ring_start_;
     std::function<void(int)> on_timer_set_;
+    std::function<void()> on_stopwatch_instead_;
+    std::atomic<int64_t> last_speech_us_{0};
+    std::atomic<bool> last_speech_has_duration_{true};
     std::function<void(const RingInfo&)> on_ring_answered_;
     // Unanswered alarm: a 10-minute snooze timer (shown like any timer) that rings as
     // the alarm again (retry_* guarded by mutex_).

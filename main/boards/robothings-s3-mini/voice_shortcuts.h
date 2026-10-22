@@ -59,4 +59,8 @@ VoiceShortcut ParseVoiceShortcut(const std::string& text);  // ParseVoiceCommand
 // minutes", "half an hour"), in seconds; 0 when there is none.
 int ParseDuration(const std::string& normalized_text);
 
+// False only for a timer request that names no duration ("start the timer", "timer
+// set karo"): that is the stopwatch, never a countdown. True for anything else.
+bool MentionsDuration(const std::string& text);
+
 const char* VoiceShortcutName(VoiceShortcut shortcut);

@@ -1,4 +1,4 @@
-// Numbers as natural English words for what the assistant says ("twenty-five",
+// Numbers as natural English words for what the assistant says ("twenty five",
 // "three thousand six hundred fifty", "one million four thousand five hundred").
 // No ESP-IDF dependencies (unit-tested on a PC).
 #pragma once
@@ -17,7 +17,7 @@ inline std::string NumberToEnglishWords(int64_t n) {
     if (n < 20) return kOnes[n];
     if (n < 100) {
         std::string s = kTens[n / 10];
-        if (n % 10) s += std::string("-") + kOnes[n % 10];
+        if (n % 10) s += std::string(" ") + kOnes[n % 10];
         return s;
     }
     if (n < 1000) {

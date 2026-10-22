@@ -10,7 +10,7 @@
 // they only bound where the symbols may move.
 //
 // The symbols move inside the circles (looking around), blink, squash into each
-// other when the expression changes, pulse with speech and dance with music. In
+// other when the expression changes, pulse with speech. In
 // standby the big square eyes drift slowly and blink in a relaxed way.
 #pragma once
 
@@ -55,7 +55,6 @@ public:
         Setup,     // Wi-Fi setup, activation, upgrade
         Sleeping,  // idle for a while / power-save
         Alarm,     // an alarm or timer is ringing
-        Music,     // a song is playing
     };
 
     // `on` is the color that lights an OLED pixel, `off` the background color.

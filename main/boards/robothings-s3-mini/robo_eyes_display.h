@@ -1,6 +1,6 @@
 // 128x64 OLED display for the RoboThings S3 Mini: full-screen RoboEyes, with a
 // 16 px text strip on top that only appears for alarms, notifications, setup
-// messages (Wi-Fi, activation code) and the song title.
+// messages (Wi-Fi, activation code).
 #pragma once
 
 #include "device_state.h"
@@ -57,11 +57,6 @@ public:
     // Shows a pinned banner (e.g. "ALARM 07:00") and the alarm eyes until cleared.
     void SetAlarmBanner(const std::string& text);
     void ClearAlarmBanner();
-
-    // While music plays and the device is idle the status line shows the song and
-    // the eyes dance; a conversation still shows its normal status.
-    void SetNowPlaying(const std::string& title);
-    void ClearNowPlaying();
 
     // Shows an expression on demand ("roo ke dikhao" -> crying) for `seconds`,
     // overriding automatic emotions and sleep. Returns false for unknown names.
@@ -127,7 +122,6 @@ private:
     lv_timer_t* animation_timer_ = nullptr;
 
     bool alarm_active_ = false;
-    bool music_active_ = false;
     // The status strip covers the top of the eyes, so it only appears when it has
     // something worth reading: until this tick (lv_tick), or while pinned below.
     uint32_t overlay_until_ms_ = 0;

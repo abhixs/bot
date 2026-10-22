@@ -258,9 +258,10 @@ void AlarmManager::RegisterTools() {
 
     mcp.AddTool(
         "self.alarm.set_timer",
-        "Start a countdown timer on the device, only when a duration is given, e.g. 'set a 10 "
-        "minute timer'. 'Start timer' / 'start stopwatch' with no duration is the stopwatch "
-        "(self.stopwatch.control), never this. (Pomodoro: self.pomodoro.start.) Give the "
+        "Start a countdown timer on the device, ONLY when the user said a duration, e.g. 'set "
+        "a 10 minute timer'. 'Start the timer', 'timer chalu karo', 'timer set karo' with no "
+        "duration is the stopwatch (self.stopwatch.control action 'start'), never this: never "
+        "guess 30 seconds or 1 minute. (Pomodoro: self.pomodoro.start.) Give the "
         "duration as minutes and/or seconds. A timer under 31 minutes shows its countdown on "
         "the screen at once.",
         PropertyList({
@@ -274,6 +275,19 @@ void AlarmManager::RegisterTools() {
             if (!alarm_schedule::IsTimeValid(now)) {
                 return std::unexpected(
                     std::string("Device clock is not synced yet; try again in a moment."));
+            }
+            if (last_speech_us_ != 0 && !last_speech_has_duration_ &&
+                esp_timer_get_time() - last_speech_us_ < 60 * 1000000LL) {
+                // "Start the timer" with no duration is the stopwatch, never a guessed
+                // 30 second / 1 minute countdown.
+                if (!Stopwatch::GetInstance().StartedWithin(15 * 1000000LL) &&
+                    on_stopwatch_instead_) {
+                    on_stopwatch_instead_();
+                }
+                return std::string(
+                    "{\"success\":true,\"note\":\"No duration was said, so the stopwatch "
+                    "was started instead (counting up). Do not set a countdown; just say the "
+                    "stopwatch started.\"}");
             }
             if (Stopwatch::GetInstance().StartedWithin(15 * 1000000LL)) {
                 // "Start timer" was just started as the stopwatch on the device.

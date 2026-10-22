@@ -9,7 +9,6 @@
 #include "device_action.h"
 #include "led/single_led.h"
 #include "mcp_server.h"
-#include "music_player.h"
 #include "number_words.h"
 #include "pomodoro.h"
 #include "popdown_sound.h"
@@ -295,6 +294,7 @@ private:
         user_turn_seen_ = true;
         assistant_sentences_ = 0;
         short_sorry_ = false;
+        AlarmManager::GetInstance().NoteUserSpeech(MentionsDuration(text));
         const VoiceCommand command = ParseVoiceCommand(text);
         if (command.type == VoiceShortcut::None) return;
         let_ai_reply_ = false;
@@ -462,7 +462,6 @@ private:
                 alarms.CancelTimersAndAlarmsWithin(60 * 60);
                 if (pomodoro.active()) pomodoro.Stop();
                 stopwatch.Stop();
-                MusicPlayer::GetInstance().Stop();
                 pomodoro_view_ = false;
                 if (eyes_display_ != nullptr) eyes_display_->ClearCountdown();
                 return true;
@@ -580,11 +579,10 @@ private:
         }
 
         // Echo cancellation only while the device itself plays something (reply, alarm,
-        // beep, music): it is the heaviest part of the audio front end, and with nothing
+        // beep): it is the heaviest part of the audio front end, and with nothing
         // playing it only takes CPU from the wake word and the speech encoder.
         const bool playing = state == kDeviceStateSpeaking || alarms.IsRinging() ||
-                             state == kDeviceStateNotifying ||
-                             MusicPlayer::GetInstance().IsPlaying();
+                             state == kDeviceStateNotifying;
         if (static_cast<int>(playing) != aec_allowed_) {
             app.GetAudioService().AllowEchoCancellation(playing);
             aec_allowed_ = playing ? 1 : 0;
@@ -778,23 +776,9 @@ private:
         Application::GetInstance().SetWakeSoundOnDetect(true);
         ClockSync::GetInstance().Initialize();  // keep the clock on IST
 
-        auto& music = MusicPlayer::GetInstance();
-        music.OnNowPlaying([this](const std::string& title) {
-            Application::GetInstance().Schedule([this, title]() {
-                if (eyes_display_ != nullptr) eyes_display_->SetNowPlaying(title);
-            });
-        });
-        music.OnStopped([this]() {
-            Application::GetInstance().Schedule([this]() {
-                if (eyes_display_ != nullptr) eyes_display_->ClearNowPlaying();
-            });
-        });
-        music.Initialize();
-
         auto& alarms = AlarmManager::GetInstance();
         alarms.OnRingStart([this](const AlarmManager::RingInfo& info) {
             Pomodoro::GetInstance().HandleRing(info);
-            MusicPlayer::GetInstance().Stop();  // the alarm takes over the speaker
             if (info.lamp && lamp_ != nullptr) {
                 lamp_->Set(true);
             }
@@ -809,6 +793,11 @@ private:
             if (eyes_display_ != nullptr) {
                 eyes_display_->ClearAlarmBanner();
             }
+        });
+        alarms.OnStopwatchInstead([this]() {
+            Stopwatch::GetInstance().Start();
+            stopwatch_started_us_ = esp_timer_get_time();
+            if (eyes_display_ != nullptr) eyes_display_->ShowStopwatch();
         });
         alarms.OnTimerSet([this](int seconds) {
             // A short timer (under 31 minutes, e.g. a Pomodoro) shows its countdown at once.
@@ -1053,10 +1042,12 @@ private:
             "(and do not reply at all) when the user says bye, bye bye, goodbye, chup raho, chup "
             "ho jao, so jao, stop talking or similar. Device style rule: keep replies short; if "
             "you did not understand the user, answer only 'Sorry, samajh nahi paayi. Fir se bolein.' "
-            "and nothing else. Numbers rule: always say every number in English words, also "
-            "in Hindi sentences, never in Hindi and never digit by digit - prices, dates, "
-            "amounts, times, anything: 'six hundred fifty', 'three thousand six hundred fifty', "
-            "'forty-two thousand five hundred sixteen', 'one million four thousand five hundred'.",
+            "and nothing else. Numbers rule (strict): write every number as English words, never "
+            "as digits and never as Hindi number words (no 'adsath hazaar', no 'पांच सौ'), also "
+            "inside a Hindi reply - prices, dates, years, amounts, times, scores, anything: "
+            "68504 = 'sixty eight thousand five hundred four', 650 = 'six hundred fifty', "
+            "1004500 = 'one million four thousand five hundred'; e.g. 'Iska price sixty eight "
+            "thousand five hundred four rupees hai.'",
             PropertyList(), [this](const PropertyList&) -> ToolResult {
                 Application::GetInstance().Schedule([this]() { GoStandby(); });
                 return true;

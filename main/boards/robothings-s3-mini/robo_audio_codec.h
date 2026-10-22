@@ -9,7 +9,7 @@
 // - a software playback reference: the MAX98357A cannot loop its output back, so
 //   the samples sent to the speaker are kept, resampled to 16 kHz and handed to the
 //   AFE as the "R" channel next to the microphone ("MR"). That lets the AFE echo
-//   canceller remove the device's own sound (alarm beep, voice, music) from the
+//   canceller remove the device's own sound (alarm beep, voice) from the
 //   microphone signal while the wake word is being listened for;
 // - a mute switch used to silence a reply at once (e.g. after "bye") without
 //   touching the saved volume;

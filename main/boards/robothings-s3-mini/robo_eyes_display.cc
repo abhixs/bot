@@ -424,8 +424,7 @@ void RoboEyesDisplay::Animate(uint32_t elapsed_ms) {
     }
 
     // Eyes: standby (idle for a moment) shows the relaxed standby eyes.
-    const bool music_showing = music_active_ && state == kDeviceStateIdle;
-    if (screen == DisplayScreen::Eyes && state == kDeviceStateIdle && !music_active_) {
+    if (screen == DisplayScreen::Eyes && state == kDeviceStateIdle) {
         idle_ms_ = std::min<uint32_t>(idle_ms_ + elapsed_ms, kSleepAfterMs);
     } else {
         idle_ms_ = 0;
@@ -445,9 +444,7 @@ void RoboEyesDisplay::Animate(uint32_t elapsed_ms) {
             activity = RoboEyes::Activity::Idle;
             break;
         default:
-            if (music_showing) {
-                activity = RoboEyes::Activity::Music;
-            } else if (power_save_ || idle_ms_ >= kSleepAfterMs) {
+            if (power_save_ || idle_ms_ >= kSleepAfterMs) {
                 activity = RoboEyes::Activity::Sleeping;  // standby eyes
             } else if (state == kDeviceStateConnecting) {
                 // Wake word heard (the connection opens): ready for the command.
@@ -464,11 +461,11 @@ void RoboEyesDisplay::Animate(uint32_t elapsed_ms) {
             break;
     }
     eyes_->SetActivity(activity);
-    // While the speaker plays (a reply, music) the eyes are redrawn at about 8 fps
+    // While the speaker plays a reply the eyes are redrawn at about 8 fps
     // instead of 25: every frame is a full-screen software render plus ~23 ms of
     // I2C, and at 25 fps that work competed with the audio tasks (the voice broke
     // up in the emotion mode, not in the clock mode, which redraws once a second).
-    if (state == kDeviceStateSpeaking || music_showing) {
+    if (state == kDeviceStateSpeaking) {
         skipped_ms_ += elapsed_ms;
         if (++skipped_frames_ < kPlaybackFrameDivider) return;
         elapsed_ms = skipped_ms_;
@@ -528,9 +525,6 @@ bool RoboEyesDisplay::HoldExpression(const std::string& name, int seconds) {
 void RoboEyesDisplay::SetStatus(const char* status) {
     if (alarm_active_) {
         return;  // the alarm banner stays pinned until it is cleared
-    }
-    if (music_active_ && static_cast<int32_t>(overlay_until_ms_ - lv_tick_get()) > 0) {
-        return;  // keep the song title on screen for its few seconds
     }
     LvglDisplay::SetStatus(status);
 }
@@ -630,31 +624,4 @@ void RoboEyesDisplay::ClearAlarmBanner() {
     }
     SetStatus(Lang::Strings::STANDBY);
     UpdateStatusBar(true);
-}
-
-void RoboEyesDisplay::SetNowPlaying(const std::string& title) {
-    DisplayLockGuard lock(this);
-    music_active_ = true;
-    idle_ms_ = 0;
-    if (status_label_ != nullptr && !alarm_active_) {
-        std::string text = "Playing: " + title;
-        lv_label_set_text(status_label_, text.c_str());
-        lv_obj_remove_flag(status_label_, LV_OBJ_FLAG_HIDDEN);
-        if (notification_label_ != nullptr) lv_obj_add_flag(notification_label_, LV_OBJ_FLAG_HIDDEN);
-        ShowOverlayFor(6000);
-    }
-}
-
-void RoboEyesDisplay::ClearNowPlaying() {
-    {
-        DisplayLockGuard lock(this);
-        if (!music_active_) return;
-        music_active_ = false;
-        overlay_until_ms_ = lv_tick_get();
-        last_displayed_clock_min_ = -1;
-    }
-    if (Application::GetInstance().GetDeviceState() == kDeviceStateIdle) {
-        SetStatus(Lang::Strings::STANDBY);
-        UpdateStatusBar(true);
-    }
 }

@@ -15,9 +15,6 @@ with a new board `robothings-s3-mini`.
   lamp-on with the alarm. Saved in flash, ring without internet. Stop it by saying the
   wake word ("Alexa") or pressing any button; each ring lasts 20 s.
 - **Lamp relay** voice control (GPIO 12), as before.
-- **Music from your own library**: run `tools/music-server/robothings_music_server.py`
-  on a PC with your songs, then say "Alexa, Tum Hi Ho chalao". Saying "Alexa" pauses,
-  the song resumes after the chat. Tools `self.music.*`.
 - **India time (IST)** by default: the clock is synced from internet time (SNTP) and
   kept at UTC+05:30. Another zone can be set by voice (tool `self.clock.set_timezone`).
 
@@ -114,7 +111,7 @@ Commands are recognised from their key words, so natural variations work.
 - **Echo cancellation**: the MAX98357A cannot feed its output back, so the firmware
   keeps a copy of what it plays (software playback reference) and the ESP-SR AFE
   removes the device's own sound from the microphone while it listens for the wake
-  word. "Alexa" can then be heard over the alarm beep, music or the assistant's voice.
+  word. "Alexa" can then be heard over the alarm beep or the assistant's voice.
 - **Alarms / timers**: the beep (about 1 s) repeats every 3 s and the wake word is more
   sensitive while it rings. Say "Alexa" (or press any button) to stop it.
 - A clipping microphone (too loud / too close) is reported in the serial log.

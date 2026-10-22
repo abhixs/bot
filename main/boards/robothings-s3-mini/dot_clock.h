@@ -17,9 +17,9 @@ public:
              lv_color_t on, lv_color_t off);
     ~DotClock();
 
-    // Each group is up to 3 characters from "0123456789-% " (3 only for e.g. "100",
-    // set closer together); a single character is centred. Redraws only when
-    // something changed.
+    // Each group is up to 3 characters from "0123456789-% "; a single character is
+    // centred. With a 3-character group (e.g. "100") both groups are drawn with
+    // smaller dots so they stay inside the eyes. Redraws only when something changed.
     void Set(const std::string& left, const std::string& right, bool colon);
 
     lv_obj_t* obj() const { return obj_; }
@@ -37,4 +37,5 @@ private:
     std::string left_, right_;
     bool colon_ = false;
     int32_t origin_x_ = 0;  // left edge of the object while drawing
+    bool small_ = false;    // smaller dots (while drawing)
 };

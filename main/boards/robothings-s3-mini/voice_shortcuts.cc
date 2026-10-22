@@ -169,13 +169,17 @@ VoiceShortcut ParseTheme(const Sentence& s) {
 
 // ---------------------------------------------------------------- timers
 constexpr Words kSetWords = {"set", "start", "laga", "lagao", "lagado", "lagaao", "chalu", "shuru",
-                             "begin", "chalao", "लगाओ", "लगा", "शुरू", "चालू", "स्टार्ट"};
-constexpr Words kStopWords = {"stop", "end", "band", "khatam", "finish", "cancel", "off", "ruko", "ruk",
-                              "dismiss", "enough", "bas", "बंद", "स्टॉप", "रुको", "बस", "खत्म"};
+                             "begin", "chalao", "chala", "on", "लगाओ", "लगा", "शुरू", "चालू",
+                             "स्टार्ट", "सेट", "चलाओ", "चला", "ऑन"};
+constexpr Words kStopWords = {"stop", "end", "band", "bandh", "khatam", "finish", "cancel", "off",
+                              "ruko", "ruk", "rukjao", "dismiss", "enough", "bas", "बंद", "बन्द",
+                              "स्टॉप", "रुको", "रुक", "बस", "खत्म", "ख़त्म"};
 // "stop" may come with these words and still mean "stop the ringing alarm".
 constexpr Words kStopFiller = {"it", "the", "alarm", "karo", "kar", "do", "ok", "okay", "please", "jao", "jaao",
                                "now", "ab", "turn", "that", "this", "ringing", "sound", "beep",
-                               "करो", "कर", "दो", "अलार्म", "अब", "ओके"};
+                               "karein", "kariye", "kardo", "dijiye", "ho", "jaye", "abhi", "yaar",
+                               "करो", "कर", "दो", "अलार्म", "अब", "ओके", "जाओ", "करें", "करिए",
+                               "दीजिए", "अभी", "प्लीज", "प्लीज़"};
 constexpr Words kPauseWords = {"pause", "hold", "roko", "rok", "रोको", "पॉज़", "पॉज"};
 constexpr Words kResumeWords = {"resume", "continue", "unpause", "wapas", "dobara", "फिर",
                                 "रिज्यूम"};
@@ -186,7 +190,8 @@ constexpr Words kPomodoroWords = {"pomodoro", "pomodoros", "पोमोडो�
 constexpr Words kStopwatchWords = {"stopwatch", "स्टॉपवॉच"};
 constexpr Words kAlarmOnlyWords = {"alarm", "ringing", "sound", "beep", "अलार्म"};
 constexpr Words kAllWords = {"sab", "sabhi", "saara", "sara", "saare", "sare", "all",
-                             "everything", "kuch", "kuchh", "सब", "सभी", "सारा", "सारे"};
+                             "everything", "kuch", "kuchh", "sabkuch", "sabkuchh", "सब", "सभी",
+                             "सारा", "सारे", "कुछ", "सबकुछ"};
 constexpr Words kCountdownTimerWords = {"timer", "countdown", "टाइमर", "काउंटडाउन"};
 constexpr Words kNotTimerWords = {"alarm", "alarms", "remind", "reminder", "yaad", "baje",
                                   "अलार्म", "बजे", "याद"};
@@ -425,6 +430,22 @@ VoiceShortcut ParseTicking(const Sentence& s) {
 
 int ParseDuration(const std::string& normalized_text) {
     return DurationOf(Sentence(normalized_text));
+}
+
+bool MentionsDuration(const std::string& raw) {
+    const std::string text = NormalizeSpeech(raw);
+    if (HasDigit(text)) return true;
+    const Sentence s(text);
+    // Only "start the timer" (or a misheard "start the time") is checked; any other
+    // speech, e.g. "das" answering "for how long?", is trusted.
+    const bool timer_request =
+        s.Has(kCountdownTimerWords) || (s.Has({"time", "टाइम"}) && s.Has(kSetWords));
+    if (!timer_request) return true;
+    if (DurationOf(s) > 0) return true;
+    // Any unit word at all ("kuch minute", "आधे घंटे"): a duration the parser may not
+    // understand, so the AI's own reading of it is trusted.
+    return s.Contains({"min", "sec", "hour", "hr", "ghant", "minat", "minut", "मिनट", "सेकंड",
+                       "सेकेंड", "घंट", "आधा", "आधे", "half", "aadh", "pomodoro", "पोमोडोरो"});
 }
 
 std::string NormalizeSpeech(const std::string& text) {

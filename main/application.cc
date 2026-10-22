@@ -1007,7 +1007,7 @@ void Application::PlayWakeSoundNow() {
     if (!wake_sound_on_detect_) {
         return;
     }
-    audio_service_.ResetDecoder();  // nothing older (alarm beep, music) in front of it
+    audio_service_.ResetDecoder();  // nothing older (alarm beep) in front of it
     audio_service_.PlaySound(Lang::Sounds::OGG_POPUP);
 }
 

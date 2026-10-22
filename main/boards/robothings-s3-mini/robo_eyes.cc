@@ -113,8 +113,6 @@ RoboEyes::Mood RoboEyes::EffectiveMood() const {
             return Mood::Surprised;
         case Activity::Setup:
             return Mood::Loading;
-        case Activity::Music:
-            return Mood::HappyClosed;
         // Voice states: always the same face, so it is clear what the device is doing.
         case Activity::WakeHeard:
             return Mood::Sweet;
@@ -511,12 +509,6 @@ void RoboEyes::Draw(lv_layer_t* layer) {
             // Slow, even pulse instead of random jumps: no position change at all.
             scale = 1.0f + 0.07f * (0.5f - 0.5f * std::cos(time_ms_ * 2.0f * kPi / 2000.0f));
             break;
-        case Activity::Music: {
-            float beat = 0.5f - 0.5f * std::cos(time_ms_ * 2.0f * kPi / 1090.0f);
-            move_y += 1.5f - beat * 3.0f;
-            move_x += std::sin(time_ms_ * kPi / 2180.0f) * 3.0f;
-            break;
-        }
         case Activity::Alarm:
             move_x += std::sin(time_ms_ / 22.0f) * 3.0f;  // shaking
             break;
